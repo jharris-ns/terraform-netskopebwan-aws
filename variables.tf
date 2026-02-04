@@ -20,6 +20,24 @@ variable "aws_network_config" {
   })
 }
 
+##########################
+## Deployment Variables ##
+##########################
+
+variable "environment" {
+  description = "Environment prefix for resource naming (e.g. prod, staging, dev)"
+  type        = string
+  default     = "netskope"
+}
+
+variable "tags" {
+  description = "Common tags applied to all AWS resources via provider default_tags"
+  type        = map(string)
+  default = {
+    ManagedBy = "terraform"
+  }
+}
+
 ##############################
 ## Gateway Count Variables ##
 ##############################
@@ -59,7 +77,14 @@ variable "gateway_role" {
 }
 
 variable "inside_cidr_base" {
-  description = "Base /24 link-local CIDR from which /29 blocks are carved per gateway (e.g. 169.254.100.0/24)"
+  description = <<-EOT
+    Base link-local CIDR from which /29 blocks are carved per gateway for GRE tunnel inside addressing.
+    AWS TGW Connect Peer constraints:
+      - Must be from the 169.254.0.0/16 link-local range
+      - Each gateway's /29 block must not overlap with other Connect Peers
+      - Avoid 169.254.169.0/24 (EC2 metadata) and 169.254.170.0/24 (reserved by AWS)
+      - Must be a /29 per peer (the module handles the subdivision automatically)
+  EOT
   type        = string
   default     = "169.254.100.0/24"
 }
@@ -94,10 +119,10 @@ variable "aws_instance" {
 variable "netskope_tenant" {
   description = "Netskope Tenant Details"
   type = object({
-    tenant_id      = string
-    tenant_url     = string
-    tenant_token   = string
-    tenant_bgp_asn = optional(string, "400")
+    deployment_name = string # Free-form identifier used in resource naming (e.g. "my-corp-prod")
+    tenant_url      = string
+    tenant_token    = string
+    tenant_bgp_asn  = optional(string, "400")
   })
 }
 
@@ -118,14 +143,24 @@ variable "netskope_gateway_config" {
 ##############################
 
 variable "aws_transit_gw" {
-  description = "AWS Transit Gateway configuration for GRE/BGP connectivity"
+  description = <<-EOT
+    AWS Transit Gateway configuration for GRE/BGP connectivity.
+    ASN constraints:
+      - tgw_asn must be a 16-bit (1–65534) or 32-bit (131072–4199999999) private ASN
+      - AWS reserves 7224 and 9059; these cannot be used
+      - Must not conflict with tenant_bgp_asn (the gateway-side ASN)
+    CIDR constraints:
+      - tgw_cidr is assigned to the TGW itself and used for Connect Peer addressing
+      - Must be a /24 or shorter prefix from RFC 1918 or 100.64.0.0/10 (CG-NAT) space
+      - Must not overlap with any VPC CIDR attached to the TGW
+  EOT
   type = object({
     create_transit_gw = optional(bool, true)
     tgw_id            = optional(string, null)
-    tgw_asn           = optional(string, "64512")
-    tgw_cidr          = optional(string, "")
-    vpc_attachment     = optional(string, "")
-    phy_intfname       = optional(string, "enp2s1")
+    tgw_asn           = optional(string, "64512") # Must not conflict with tenant_bgp_asn
+    tgw_cidr          = optional(string, "")      # Must not overlap with attached VPC CIDRs
+    vpc_attachment    = optional(string, "")
+    phy_intfname      = optional(string, "enp2s1")
   })
 }
 

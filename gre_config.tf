@@ -1,12 +1,33 @@
 #------------------------------------------------------------------------------
-#  GRE Config Module - SSM-based FRR JSON writing + GRE tunnel configuration
+#  GRE Config - SSM-based FRR JSON writing + GRE tunnel configuration
 #------------------------------------------------------------------------------
 
-#
-# SSM Document for FRR config writing + GRE tunnel setup (shared across all gateways)
-#
+# --- GRE config data ---
+
+locals {
+  gre_configs = {
+    for gw_key, gw in local.gateways : gw_key => {
+      instance_id  = aws_instance.gateways[gw_key].id
+      inside_ip    = cidrhost(gw.inside_cidr, 1)
+      inside_mask  = cidrnetmask(gw.inside_cidr)
+      local_ip     = tolist(aws_network_interface.gw_interfaces["${gw_key}-${local.gw_lan_key[gw_key]}"].private_ips)[0]
+      remote_ip    = aws_ec2_transit_gateway_connect_peer.gw_peers[gw_key].transit_gateway_address
+      intf_name    = "gre1"
+      mtu          = "1300"
+      phy_intfname = var.aws_transit_gw.phy_intfname
+      bgp_peers = {
+        peer1 = cidrhost(gw.inside_cidr, 2)
+        peer2 = cidrhost(gw.inside_cidr, 3)
+      }
+      bgp_metric = gw.bgp_metric
+    }
+  }
+}
+
+# --- SSM Document for FRR config writing + GRE tunnel setup ---
+
 resource "aws_ssm_document" "gre_config" {
-  name            = "${replace(var.environment, "-", "_")}_netskope_gre_config"
+  name            = "${replace(var.netskope_gateway_config.gateway_policy, "-", "_")}_netskope_gre_config"
   document_type   = "Command"
   document_format = "YAML"
 
@@ -214,15 +235,14 @@ resource "aws_ssm_document" "gre_config" {
   })
 
   tags = {
-    Name = "${var.environment}-netskope-gre-config"
+    Name = "${var.netskope_gateway_config.gateway_policy}-netskope-gre-config"
   }
 }
 
-#
-# GRE Config: Poll for SSM readiness, send command, poll for completion (one per gateway)
-#
+# --- GRE Config: Poll for SSM readiness, send command, poll for completion ---
+
 resource "null_resource" "gre_config" {
-  for_each   = var.gre_configs
+  for_each   = local.gre_configs
   depends_on = [aws_ssm_document.gre_config]
 
   triggers = {
@@ -234,8 +254,8 @@ resource "null_resource" "gre_config" {
     intf_name    = each.value.intf_name
     mtu          = each.value.mtu
     phy_intfname = each.value.phy_intfname
-    bgp_asn      = var.bgp_asn
-    tgw_asn      = var.tgw_asn
+    bgp_asn      = var.netskope_tenant.tenant_bgp_asn
+    tgw_asn      = var.aws_transit_gw.tgw_asn
     bgp_peer1    = each.value.bgp_peers.peer1
     bgp_peer2    = each.value.bgp_peers.peer2
     bgp_metric   = each.value.bgp_metric
@@ -243,7 +263,7 @@ resource "null_resource" "gre_config" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      REGION="${var.region}"
+      REGION="${var.aws_network_config.region}"
       INSTANCE_ID="${each.value.instance_id}"
 
       # Poll for SSM readiness (up to 5 minutes, 10s intervals)
@@ -268,19 +288,19 @@ resource "null_resource" "gre_config" {
         --instance-ids $INSTANCE_ID \
         --document-name ${aws_ssm_document.gre_config.name} \
         --parameters '${jsonencode({
-          insideIp    = [each.value.inside_ip]
-          insideMask  = [each.value.inside_mask]
-          localIp     = [each.value.local_ip]
-          remoteIp    = [each.value.remote_ip]
-          intfName    = [each.value.intf_name]
-          mtu         = [each.value.mtu]
-          phyIntfname = [each.value.phy_intfname]
-          bgpAsn      = [var.bgp_asn]
-          bgpPeer1    = [each.value.bgp_peers.peer1]
-          bgpPeer2    = [each.value.bgp_peers.peer2]
-          bgpMetric   = [each.value.bgp_metric]
-          tgwAsn      = [var.tgw_asn]
-        })}' \
+    insideIp    = [each.value.inside_ip]
+    insideMask  = [each.value.inside_mask]
+    localIp     = [each.value.local_ip]
+    remoteIp    = [each.value.remote_ip]
+    intfName    = [each.value.intf_name]
+    mtu         = [each.value.mtu]
+    phyIntfname = [each.value.phy_intfname]
+    bgpAsn      = [var.netskope_tenant.tenant_bgp_asn]
+    bgpPeer1    = [each.value.bgp_peers.peer1]
+    bgpPeer2    = [each.value.bgp_peers.peer2]
+    bgpMetric   = [each.value.bgp_metric]
+    tgwAsn      = [var.aws_transit_gw.tgw_asn]
+})}' \
         --comment "Configure GRE tunnel on gateway ${each.key}" \
         --query "Command.CommandId" \
         --output text)
@@ -298,5 +318,5 @@ resource "null_resource" "gre_config" {
         esac
       done
     EOT
-  }
+}
 }

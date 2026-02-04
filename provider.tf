@@ -11,6 +11,10 @@ locals {
 
 provider "aws" {
   region = var.aws_network_config.region
+
+  default_tags {
+    tags = var.tags
+  }
 }
 
 provider "netskopebwan" {

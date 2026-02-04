@@ -7,15 +7,15 @@ output "gateways" {
   description = "Deployed gateway instances and their GRE configuration status"
   value = {
     for gw_key, gw in local.gateways : gw_key => {
-      instance_id    = module.aws_ec2.instance_ids[gw_key]
-      gre_configured = try(module.gre_config.gre_config_ids[gw_key] != null, false)
+      instance_id    = aws_instance.gateways[gw_key].id
+      gre_configured = try(null_resource.gre_config[gw_key].id != null, false)
     }
   }
 }
 
 output "gre-config-ssm-document" {
   description = "SSM document name used for GRE tunnel configuration"
-  value       = module.gre_config.ssm_document_name
+  value       = aws_ssm_document.gre_config.name
 }
 
 output "computed-gateway-map" {
@@ -24,5 +24,5 @@ output "computed-gateway-map" {
 }
 
 output "client-details" {
-  value = var.clients.create_clients ? "Client deployed at ${try(module.clients[0].client_instance.ip, "unknown")}" : null
+  value = var.clients.create_clients ? "Client deployed at ${try(aws_instance.client_instance[0].private_ip, "unknown")}" : null
 }

@@ -1,9 +1,8 @@
 #------------------------------------------------------------------------------
-#  Copyright (c) 2022 Infiot Inc.
-#  All rights reserved.
+#  ENIs and EIPs (per gateway x interface)
 #------------------------------------------------------------------------------
 
-# ─── ENIs (per gateway × interface) ──────────────────────────────────────────
+# --- ENIs (per gateway x interface) ---
 
 resource "aws_network_interface" "gw_interfaces" {
   for_each        = local.gateway_subnets
@@ -13,11 +12,11 @@ resource "aws_network_interface" "gw_interfaces" {
   source_dest_check = each.value.subnet.overlay == "public" ? true : false
 
   tags = {
-    Name = join("-", [each.value.gw_key, upper(each.value.intf_key), var.netskope_tenant.tenant_id])
+    Name = join("-", [each.value.gw_key, upper(each.value.intf_key), var.netskope_tenant.deployment_name])
   }
 }
 
-# ─── EIPs (WAN/public overlay interfaces only) ──────────────────────────────
+# --- EIPs (WAN/public overlay interfaces only) ---
 
 resource "aws_eip" "gw_eips" {
   for_each                  = local.gw_public_interfaces
@@ -26,6 +25,6 @@ resource "aws_eip" "gw_eips" {
   associate_with_private_ip = tolist(aws_network_interface.gw_interfaces[each.key].private_ips)[0]
 
   tags = {
-    Name = join("-", [each.value.gw_key, upper(each.value.intf_key), var.netskope_tenant.tenant_id])
+    Name = join("-", [each.value.gw_key, upper(each.value.intf_key), var.netskope_tenant.deployment_name])
   }
 }

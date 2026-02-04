@@ -18,6 +18,10 @@ terraform {
       source  = "netskopeoss/netskopebwan"
       version = "0.0.2"
     }
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
     utils = {
       source = "cloudposse/utils"
     }
