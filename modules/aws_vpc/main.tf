@@ -3,50 +3,62 @@
 #  All rights reserved.
 #------------------------------------------------------------------------------
 
-data "aws_availability_zones" "aws_availability_zone" {
-  state = "available"
-  filter {
-    name   = "region-name"
-    values = [var.aws_network_config.region]
-  }
-}
-
 locals {
-  primary_zone   = var.aws_network_config.primary_zone != null ? var.aws_network_config.primary_zone : data.aws_availability_zones.aws_availability_zone.names[0]
-  secondary_zone = var.aws_network_config.secondary_zone != null ? var.aws_network_config.secondary_zone : data.aws_availability_zones.aws_availability_zone.names[1]
-}
+  # AZ is always set by the root locals.tf computed gateway map
+  gateways_with_az = var.gateways
 
-locals {
-  primary_gw_enabled_interfaces = {
-    for intf, subnet in var.aws_network_config.primary_gw_subnets :
-    intf => subnet if subnet != null
-  }
-  secondary_gw_enabled_interfaces = {
-    for intf, subnet in var.aws_network_config.secondary_gw_subnets :
-    intf => subnet if subnet != null
-  }
-  primary_public_overlay_interfaces = {
-    for intf, subnet in local.primary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "public"
-  }
-  primary_private_overlay_interfaces = {
-    for intf, subnet in local.primary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "private"
-  }
-  secondary_public_overlay_interfaces = {
-    for intf, subnet in local.secondary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "public"
-  }
-  secondary_private_overlay_interfaces = {
-    for intf, subnet in local.secondary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "private"
+  # Flatten gateways × interfaces into a single map
+  gateway_subnets = merge([
+    for gw_key, gw in local.gateways_with_az : {
+      for intf_key, intf in gw.subnets :
+      "${gw_key}-${intf_key}" => {
+        gw_key    = gw_key
+        intf_key  = intf_key
+        subnet    = intf
+        az        = gw.availability_zone
+      } if intf != null
+    }
+  ]...)
+
+  # Enabled interfaces per gateway (non-null subnets)
+  gw_enabled_interfaces = {
+    for gw_key, gw in local.gateways_with_az : gw_key => {
+      for intf_key, intf in gw.subnets : intf_key => intf if intf != null
+    }
   }
 
-  primary_non_overlay_interfaces   = setsubtract(keys(local.primary_gw_enabled_interfaces), keys(merge(local.primary_public_overlay_interfaces, local.primary_private_overlay_interfaces)))
-  primary_lan_interfaces           = length(local.primary_non_overlay_interfaces) != 0 ? local.primary_non_overlay_interfaces : keys(local.primary_private_overlay_interfaces)
-  secondary_non_overlay_interfaces = setsubtract(keys(local.secondary_gw_enabled_interfaces), keys(merge(local.secondary_public_overlay_interfaces, local.secondary_private_overlay_interfaces)))
-  secondary_lan_interfaces         = length(local.secondary_non_overlay_interfaces) != 0 ? local.secondary_non_overlay_interfaces : keys(local.secondary_private_overlay_interfaces)
-}
-
-locals {
-  gateway_gre_config = {
-    primary_gw_inside_ip   = try(cidrhost(var.aws_transit_gw.primary_inside_cidr, 1), "")
-    secondary_gw_inside_ip = try(cidrhost(var.aws_transit_gw.secondary_inside_cidr, 1), "")
+  # Public overlay (WAN) interfaces per gateway-interface
+  gw_public_interfaces = {
+    for k, v in local.gateway_subnets : k => v
+    if v.subnet.overlay == "public"
   }
+
+  # LAN interfaces: those with overlay = null (not public, not private)
+  gw_lan_interfaces = {
+    for k, v in local.gateway_subnets : k => v
+    if v.subnet.overlay == null
+  }
+
+  # Unique AZs across all gateways
+  unique_azs = distinct([for gw in local.gateways_with_az : gw.availability_zone])
+
+  # Deduplicate: pick one LAN subnet per AZ for TGW VPC attachment
+  az_to_lan_subnet_key = {
+    for az in local.unique_azs : az => [
+      for k, v in local.gw_lan_interfaces : k if v.az == az
+    ][0]
+  }
+
+  # LAN interface key per gateway (first LAN interface found)
+  gw_lan_key = {
+    for gw_key, gw in local.gateways_with_az : gw_key => [
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == null
+    ][0] if length([
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == null
+    ]) > 0
+  }
+
+  has_lan_interfaces = length(local.gw_lan_interfaces) > 0
 }

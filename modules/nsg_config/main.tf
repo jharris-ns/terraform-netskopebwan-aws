@@ -1,210 +1,158 @@
+#------------------------------------------------------------------------------
+#  Copyright (c) 2022 Infiot Inc.
+#  All rights reserved.
+#------------------------------------------------------------------------------
+
 locals {
-  primary_gw_peers = {
-    inside_ip1 = try(cidrhost(var.aws_transit_gw.primary_inside_cidr, 2), "")
-    inside_ip2 = try(cidrhost(var.aws_transit_gw.primary_inside_cidr, 3), "")
-  }
-  secondary_gw_peers = {
-    inside_ip1 = try(cidrhost(var.aws_transit_gw.secondary_inside_cidr, 2), "")
-    inside_ip2 = try(cidrhost(var.aws_transit_gw.secondary_inside_cidr, 3), "")
+  # Flatten gateways × interfaces for interface configuration
+  all_gateway_interfaces = merge([
+    for gw_key, gw in var.gateways : {
+      for intf_key, intf in gw.subnets :
+      "${gw_key}-${intf_key}" => {
+        gw_key   = gw_key
+        intf_key = intf_key
+        subnet   = intf
+      } if intf != null
+    }
+  ]...)
+
+  # Public overlay interfaces
+  gw_public_interfaces = {
+    for k, v in local.all_gateway_interfaces : k => v
+    if v.subnet.overlay == "public"
   }
 
-  primary_gw_enabled_interfaces = {
-    for intf, subnet in var.aws_network_config.primary_gw_subnets :
-    intf => subnet if subnet != null
-  }
-  secondary_gw_enabled_interfaces = {
-    for intf, subnet in var.aws_network_config.secondary_gw_subnets :
-    intf => subnet if subnet != null
-  }
-  primary_public_overlay_interfaces = {
-    for intf, subnet in local.primary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "public"
-  }
-  primary_private_overlay_interfaces = {
-    for intf, subnet in local.primary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "private"
-  }
-  secondary_public_overlay_interfaces = {
-    for intf, subnet in local.secondary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "public"
-  }
-  secondary_private_overlay_interfaces = {
-    for intf, subnet in local.secondary_gw_enabled_interfaces : intf => subnet if subnet.overlay == "private"
+  # Private overlay interfaces
+  gw_private_interfaces = {
+    for k, v in local.all_gateway_interfaces : k => v
+    if try(v.subnet.overlay, null) == "private"
   }
 
-  primary_non_overlay_interfaces   = setsubtract(keys(local.primary_gw_enabled_interfaces), keys(merge(local.primary_public_overlay_interfaces, local.primary_private_overlay_interfaces)))
-  primary_lan_interfaces           = length(local.primary_non_overlay_interfaces) != 0 ? local.primary_non_overlay_interfaces : keys(local.primary_private_overlay_interfaces)
-  secondary_non_overlay_interfaces = setsubtract(keys(local.secondary_gw_enabled_interfaces), keys(merge(local.secondary_public_overlay_interfaces, local.secondary_private_overlay_interfaces)))
-  secondary_lan_interfaces         = length(local.secondary_non_overlay_interfaces) != 0 ? local.secondary_non_overlay_interfaces : keys(local.secondary_private_overlay_interfaces)
+  # LAN (non-overlay) interfaces per gateway
+  gw_lan_key = {
+    for gw_key, gw in var.gateways : gw_key => [
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == null
+    ][0] if length([
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == null
+    ]) > 0
+  }
+
+  # First public overlay interface per gateway (for metadata static route)
+  gw_public_key = {
+    for gw_key, gw in var.gateways : gw_key => [
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == "public"
+    ][0] if length([
+      for intf_key, intf in gw.subnets : intf_key
+      if intf != null && intf.overlay == "public"
+    ]) > 0
+  }
+
+  # BGP peers from TGW inside CIDRs
+  gw_bgp_peers = {
+    for gw_key, gw in var.gateways : gw_key => {
+      peer1 = cidrhost(gw.inside_cidr, 2)
+      peer2 = cidrhost(gw.inside_cidr, 3)
+    }
+  }
 }
 
-//  Policy Resource 
+# ─── Policy (shared across all gateways) ─────────────────────────────────────
+
 resource "netskopebwan_policy" "multicloud" {
   name = var.netskope_gateway_config.gateway_policy
 }
 
-// Gateway Resource 
-resource "netskopebwan_gateway" "primary" {
-  name  = var.netskope_gateway_config.gateway_name
-  model = var.netskope_gateway_config.gateway_model
-  role  = var.netskope_gateway_config.gateway_role
+# ─── Gateway Resources (one per gateway) ─────────────────────────────────────
+
+resource "netskopebwan_gateway" "gateways" {
+  for_each = var.gateways
+  name     = coalesce(each.value.gateway_name, each.key)
+  model    = var.netskope_gateway_config.gateway_model
+  role     = each.value.gateway_role
   assigned_policy {
     id   = resource.netskopebwan_policy.multicloud.id
     name = resource.netskopebwan_policy.multicloud.name
   }
 }
 
-# Netskope GW creation can take a few seconds to
-# create all dependent services in backend
-resource "time_sleep" "primary_gw_propagation" {
+resource "time_sleep" "gw_propagation" {
+  for_each        = var.gateways
   create_duration = "30s"
 
   triggers = {
-    gateway_id = netskopebwan_gateway.primary.id
+    gateway_id = netskopebwan_gateway.gateways[each.key].id
   }
 }
 
-resource "netskopebwan_gateway" "secondary" {
-  count = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  name  = "${var.netskope_gateway_config.gateway_name}-ha"
-  model = var.netskope_gateway_config.gateway_model
-  role  = var.netskope_gateway_config.gateway_role
-  assigned_policy {
-    id   = resource.netskopebwan_policy.multicloud.id
-    name = resource.netskopebwan_policy.multicloud.name
-  }
-  depends_on = [netskopebwan_gateway.primary, time_sleep.api_delay]
-}
+# ─── Interface Configuration ─────────────────────────────────────────────────
 
-resource "time_sleep" "secondary_gw_propagation" {
-  count           = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  create_duration = "30s"
-
-  triggers = {
-    gateway_id = netskopebwan_gateway.secondary[0].id
-  }
-}
-
-// Configure GE1 Interface
-resource "netskopebwan_gateway_interface" "primary" {
-  for_each   = local.primary_gw_enabled_interfaces
-  gateway_id = time_sleep.primary_gw_propagation.triggers["gateway_id"]
-  name       = upper(each.key)
+resource "netskopebwan_gateway_interface" "gw_interfaces" {
+  for_each   = local.all_gateway_interfaces
+  gateway_id = time_sleep.gw_propagation[each.value.gw_key].triggers["gateway_id"]
+  name       = upper(each.value.intf_key)
   type       = "ethernet"
   addresses {
-    address            = tolist(var.netskope_gateway_config.gateway_data.primary.interfaces[each.key].private_ips)[0]
+    address            = tolist(var.gateway_data[each.value.gw_key].interfaces[each.value.intf_key].private_ips)[0]
     address_assignment = "static"
     address_family     = "ipv4"
     dns_primary        = var.netskope_gateway_config.dns_primary
     dns_secondary      = var.netskope_gateway_config.dns_secondary
-    gateway            = cidrhost(var.aws_network_config.primary_gw_subnets[each.key].subnet_cidr, 1)
-    mask               = cidrnetmask(var.aws_network_config.primary_gw_subnets[each.key].subnet_cidr)
+    gateway            = cidrhost(var.gateways[each.value.gw_key].subnets[each.value.intf_key].subnet_cidr, 1)
+    mask               = cidrnetmask(var.gateways[each.value.gw_key].subnets[each.value.intf_key].subnet_cidr)
   }
   dynamic "overlay_setting" {
-    for_each = lookup(merge(local.primary_public_overlay_interfaces, local.primary_private_overlay_interfaces), each.key, "") != "" ? [1] : []
+    for_each = contains(keys(merge(local.gw_public_interfaces, local.gw_private_interfaces)), each.key) ? [1] : []
     content {
       is_backup           = false
       tx_bw_kbps          = 1000000
       rx_bw_kbps          = 1000000
       bw_measurement_mode = "manual"
-      tag                 = lookup(local.primary_public_overlay_interfaces, each.key, "") != "" ? "wired" : "private"
+      tag                 = contains(keys(local.gw_public_interfaces), each.key) ? "wired" : "private"
     }
   }
-  enable_nat  = lookup(local.primary_public_overlay_interfaces, each.key, "") != "" ? true : false
+  enable_nat  = contains(keys(local.gw_public_interfaces), each.key)
   mode        = "routed"
   is_disabled = false
-  zone        = lookup(local.primary_public_overlay_interfaces, each.key, "") != "" ? "untrusted" : "trusted"
+  zone        = contains(keys(local.gw_public_interfaces), each.key) ? "untrusted" : "trusted"
 }
 
-resource "netskopebwan_gateway_interface" "secondary" {
-  for_each = {
-    for intf, subnet in local.secondary_gw_enabled_interfaces : intf => subnet
-    if var.netskope_gateway_config.ha_enabled
-  }
-  gateway_id = time_sleep.secondary_gw_propagation[0].triggers["gateway_id"]
-  name       = upper(each.key)
-  type       = "ethernet"
-  addresses {
-    address            = tolist(var.netskope_gateway_config.gateway_data.secondary.interfaces[each.key].private_ips)[0]
-    address_assignment = "static"
-    address_family     = "ipv4"
-    dns_primary        = var.netskope_gateway_config.dns_primary
-    dns_secondary      = var.netskope_gateway_config.dns_secondary
-    gateway            = cidrhost(var.aws_network_config.secondary_gw_subnets[each.key].subnet_cidr, 1)
-    mask               = cidrnetmask(var.aws_network_config.secondary_gw_subnets[each.key].subnet_cidr)
-  }
-  dynamic "overlay_setting" {
-    for_each = lookup(merge(local.secondary_public_overlay_interfaces, local.secondary_private_overlay_interfaces), each.key, "") != "" ? [1] : []
-    content {
-      is_backup           = false
-      tx_bw_kbps          = 1000000
-      rx_bw_kbps          = 1000000
-      bw_measurement_mode = "manual"
-      tag                 = lookup(local.secondary_public_overlay_interfaces, each.key, "") != "" ? "wired" : "private"
-    }
-  }
-  enable_nat  = lookup(local.secondary_public_overlay_interfaces, each.key, "") != "" ? true : false
-  mode        = "routed"
-  is_disabled = false
-  zone        = lookup(local.secondary_public_overlay_interfaces, each.key, "") != "" ? "untrusted" : "trusted"
-}
+# ─── Static Route (metadata) ─────────────────────────────────────────────────
 
-// Static Route
-resource "netskopebwan_gateway_staticroute" "metadata_primary" {
-  gateway_id  = time_sleep.primary_gw_propagation.triggers["gateway_id"]
+resource "netskopebwan_gateway_staticroute" "metadata" {
+  for_each    = local.gw_public_key
+  gateway_id  = time_sleep.gw_propagation[each.key].triggers["gateway_id"]
   advertise   = true
   destination = "169.254.169.254/32"
   device      = "GE1"
   install     = true
-  nhop        = cidrhost(var.aws_network_config.primary_gw_subnets[element(keys(local.primary_public_overlay_interfaces), 0)].subnet_cidr, 1)
+  nhop        = cidrhost(var.gateways[each.key].subnets[each.value].subnet_cidr, 1)
 }
 
-resource "netskopebwan_gateway_staticroute" "metadata_secondary" {
-  count       = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  gateway_id  = time_sleep.secondary_gw_propagation[0].triggers["gateway_id"]
-  advertise   = true
-  destination = "169.254.169.254/32"
-  device      = "GE1"
-  install     = true
-  nhop        = cidrhost(var.aws_network_config.secondary_gw_subnets[element(keys(local.secondary_public_overlay_interfaces), 0)].subnet_cidr, 1)
-}
+# ─── Gateway Activation ──────────────────────────────────────────────────────
 
-resource "netskopebwan_gateway_activate" "primary" {
-  gateway_id         = time_sleep.primary_gw_propagation.triggers["gateway_id"]
+resource "netskopebwan_gateway_activate" "gateways" {
+  for_each           = var.gateways
+  gateway_id         = time_sleep.gw_propagation[each.key].triggers["gateway_id"]
   timeout_in_seconds = 86400
 }
 
-resource "netskopebwan_gateway_activate" "secondary" {
-  count              = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  gateway_id         = time_sleep.secondary_gw_propagation[0].triggers["gateway_id"]
-  timeout_in_seconds = 86400
-}
+# ─── BGP Peer Configuration ──────────────────────────────────────────────────
 
-// BGP Peer
-resource "netskopebwan_gateway_bgpconfig" "tgwpeer1_primary" {
-  gateway_id = time_sleep.primary_gw_propagation.triggers["gateway_id"]
-  name       = "tgw-peer-1-primary"
-  neighbor   = local.primary_gw_peers.inside_ip1
+resource "netskopebwan_gateway_bgpconfig" "tgw_peer1" {
+  for_each   = var.gateways
+  gateway_id = time_sleep.gw_propagation[each.key].triggers["gateway_id"]
+  name       = "tgw-peer-1-${each.key}"
+  neighbor   = local.gw_bgp_peers[each.key].peer1
   remote_as  = var.aws_transit_gw.tgw_asn
 }
 
-resource "netskopebwan_gateway_bgpconfig" "tgwpeer2_primary" {
-  gateway_id = time_sleep.primary_gw_propagation.triggers["gateway_id"]
-  name       = "tgw-peer-2-primary"
-  neighbor   = local.primary_gw_peers.inside_ip2
-  remote_as  = var.aws_transit_gw.tgw_asn
-}
-
-// BGP Peer
-resource "netskopebwan_gateway_bgpconfig" "tgwpeer1_secondary" {
-  count      = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  gateway_id = time_sleep.secondary_gw_propagation[0].triggers["gateway_id"]
-  name       = "tgw-peer-1-secondary"
-  neighbor   = local.secondary_gw_peers.inside_ip1
-  remote_as  = var.aws_transit_gw.tgw_asn
-}
-
-resource "netskopebwan_gateway_bgpconfig" "tgwpeer2_secondary" {
-  count      = var.netskope_gateway_config.ha_enabled ? 1 : 0
-  gateway_id = time_sleep.secondary_gw_propagation[0].triggers["gateway_id"]
-  name       = "tgw-peer-2-secondary"
-  neighbor   = local.secondary_gw_peers.inside_ip2
+resource "netskopebwan_gateway_bgpconfig" "tgw_peer2" {
+  for_each   = var.gateways
+  gateway_id = time_sleep.gw_propagation[each.key].triggers["gateway_id"]
+  name       = "tgw-peer-2-${each.key}"
+  neighbor   = local.gw_bgp_peers[each.key].peer2
   remote_as  = var.aws_transit_gw.tgw_asn
 }
