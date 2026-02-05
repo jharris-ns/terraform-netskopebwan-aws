@@ -30,7 +30,7 @@ resource "aws_instance" "gateways" {
 
   user_data = templatefile("${path.module}/scripts/user-data.sh", {
     netskope_gw_default_password = var.netskope_gateway_config.gateway_password
-    netskope_tenant_url          = var.netskope_tenant.tenant_url
+    netskope_tenant_url          = local.tenant_url
     netskope_gw_activation_key   = netskopebwan_gateway_activate.gateways[each.key].token
     aws_region                   = var.aws_network_config.region
   })

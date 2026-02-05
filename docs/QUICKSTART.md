@@ -26,10 +26,11 @@ aws_transit_gw = {
 }
 
 netskope_tenant = {
-  deployment_name      = "my-corp-prod"                      # Free-form string used in resource naming for identification
-  tenant_url     = "https://example.infiot.net"        # Your Netskope SD-WAN portal URL
-  tenant_token   = "YOUR_API_TOKEN"                    # REST API token from the portal
-  tenant_bgp_asn = "400"
+  deployment_name = "my-corp-prod"   # Free-form string used in resource naming
+  tenant_bgp_asn  = "400"
+  # tenant_url and tenant_token can be set here or via environment variables:
+  # export TF_VAR_netskope_api_url="https://example.infiot.net"
+  # export TF_VAR_netskope_api_token="YOUR_API_TOKEN"
 }
 
 netskope_gateway_config = {
@@ -41,13 +42,42 @@ aws_instance = {
 }
 ```
 
-## 2. Set AWS Credentials
+## 2. Set Credentials
+
+### AWS Authentication
+
+Choose one of the following methods:
+
+**Option A: AWS SSO Profile (recommended)**
+```sh
+# Login to SSO first
+aws sso login --profile my-sso-profile
+
+# Set the profile
+export AWS_PROFILE="my-sso-profile"
+```
+
+**Option B: IAM Access Keys**
+```sh
+export AWS_ACCESS_KEY_ID="AKIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+```
+
+**Option C: Named Profile (credentials file)**
+```sh
+export AWS_PROFILE="my-profile"
+```
+
+### Netskope Authentication
+
+Set the Netskope API credentials via environment variables:
 
 ```sh
-export AWS_ACCESS_KEY_ID="..."
-export AWS_SECRET_ACCESS_KEY="..."
-# or: export AWS_PROFILE="my-profile"
+export TF_VAR_netskope_api_url="https://your-tenant.infiot.net"
+export TF_VAR_netskope_api_token="your-api-token"
 ```
+
+These override any values set in `terraform.tfvars` for `netskope_tenant.tenant_url` and `netskope_tenant.tenant_token`.
 
 ## 3. Deploy
 

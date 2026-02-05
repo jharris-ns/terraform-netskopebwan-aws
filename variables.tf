@@ -120,10 +120,23 @@ variable "netskope_tenant" {
   description = "Netskope Tenant Details"
   type = object({
     deployment_name = string # Free-form identifier used in resource naming (e.g. "my-corp-prod")
-    tenant_url      = string
-    tenant_token    = string
+    tenant_url      = optional(string, "")
+    tenant_token    = optional(string, "")
     tenant_bgp_asn  = optional(string, "400")
   })
+}
+
+variable "netskope_api_url" {
+  description = "Netskope tenant URL. Set via TF_VAR_netskope_api_url env var."
+  type        = string
+  default     = ""
+}
+
+variable "netskope_api_token" {
+  description = "Netskope API token. Set via TF_VAR_netskope_api_token env var."
+  type        = string
+  sensitive   = true
+  default     = ""
 }
 
 variable "netskope_gateway_config" {
