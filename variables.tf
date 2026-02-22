@@ -177,6 +177,7 @@ variable "aws_transit_gw" {
   })
 }
 
+
 ###############################
 ## Optional Client Variables ##
 ###############################
