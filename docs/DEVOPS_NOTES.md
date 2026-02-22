@@ -191,38 +191,204 @@ resource "aws_subnet" "gw_subnets" {
 
 This pattern is used for subnets, ENIs, EIPs, and Netskope interface resources — anywhere a resource maps 1:1 with an interface rather than a gateway.
 
-### Conditional Resource Creation
+### Conditional Resource Creation (Create vs. Reuse Existing)
 
-Several resources support both "create new" and "use existing" patterns:
+The module supports both "create new" and "use existing" patterns for major infrastructure components. This is implemented using a consistent pattern: a boolean flag controls resource creation, and a local variable resolves to either the created resource or an existing one via data source lookup.
+
+#### Pattern Overview
 
 ```hcl
-resource "aws_vpc" "this" {
-  count = var.aws_network_config.create_vpc ? 1 : 0
-  ...
+# 1. Data source to look up existing resource (conditional)
+data "aws_vpc" "existing" {
+  count = var.aws_network_config.create_vpc == false ? 1 : 0
+  id    = var.aws_network_config.vpc_id
 }
 
+# 2. Resource to create new (conditional)
+resource "aws_vpc" "this" {
+  count = var.aws_network_config.create_vpc ? 1 : 0
+  # ...
+}
+
+# 3. Local that resolves to whichever exists
 locals {
-  vpc_id = var.aws_network_config.create_vpc ? aws_vpc.this[0].id : var.aws_network_config.vpc_id
+  vpc_id = var.aws_network_config.create_vpc ? aws_vpc.this[0].id : data.aws_vpc.existing[0].id
 }
 ```
 
-The same pattern applies to Transit Gateway, route tables, and client resources.
+All downstream resources reference `local.vpc_id` rather than the resource or data source directly, making them agnostic to whether the VPC was created or reused.
+
+#### Supported Resources
+
+| Resource | Create Flag | Existing ID Variable | File | Local Reference |
+|----------|-------------|---------------------|------|-----------------|
+| VPC | `aws_network_config.create_vpc` | `aws_network_config.vpc_id` | `vpc.tf:83-100` | `local.vpc_id` |
+| Internet Gateway | (follows VPC) | (auto-discovered via VPC) | `vpc.tf:104-122` | `local.igw_id` |
+| Transit Gateway | `aws_transit_gw.create_transit_gw` | `aws_transit_gw.tgw_id` | `vpc.tf:261-287` | `local.tgw` |
+| TGW VPC Attachment | (follows VPC/TGW) | `aws_transit_gw.vpc_attachment` | `vpc.tf:291-320` | `local.tgw_attachment_id` |
+| Route Tables | (follows VPC) | `aws_network_config.route_table.public/private` | `vpc.tf:140-166` | `local.public_rt_id`, `local.private_rt_id` |
+
+#### VPC (`vpc.tf`)
+
+```hcl
+# When create_vpc = false, look up the existing VPC
+data "aws_vpc" "existing" {
+  count = var.aws_network_config.create_vpc == false ? 1 : 0
+  id    = var.aws_network_config.vpc_id
+}
+
+# When create_vpc = true, create a new VPC
+resource "aws_vpc" "this" {
+  count      = var.aws_network_config.create_vpc ? 1 : 0
+  cidr_block = var.aws_network_config.vpc_cidr
+  # ...
+}
+
+locals {
+  vpc_id = var.aws_network_config.create_vpc ? aws_vpc.this[0].id : data.aws_vpc.existing[0].id
+}
+```
+
+When reusing an existing VPC, the Internet Gateway is auto-discovered:
+
+```hcl
+data "aws_internet_gateway" "existing" {
+  count = var.aws_network_config.create_vpc == false ? 1 : 0
+  filter {
+    name   = "attachment.vpc-id"
+    values = [local.vpc_id]
+  }
+}
+```
+
+#### Transit Gateway (`vpc.tf`)
+
+```hcl
+# When create_transit_gw = false, look up the existing TGW
+data "aws_ec2_transit_gateway" "existing" {
+  count = var.aws_transit_gw.create_transit_gw == false && var.aws_transit_gw.tgw_id != null ? 1 : 0
+  id    = var.aws_transit_gw.tgw_id
+}
+
+# When create_transit_gw = true, create a new TGW
+resource "aws_ec2_transit_gateway" "this" {
+  count           = var.aws_transit_gw.create_transit_gw ? 1 : 0
+  amazon_side_asn = var.aws_transit_gw.tgw_asn
+  # ...
+}
+
+locals {
+  tgw = var.aws_transit_gw.create_transit_gw ? aws_ec2_transit_gateway.this[0] : data.aws_ec2_transit_gateway.existing[0]
+}
+```
+
+#### TGW VPC Attachment (`vpc.tf`)
+
+When reusing both an existing VPC and TGW, you may also reuse an existing VPC attachment:
+
+```hcl
+data "aws_ec2_transit_gateway_vpc_attachment" "existing" {
+  count = (var.aws_network_config.create_vpc == false && var.aws_transit_gw.vpc_attachment != "") ? 1 : 0
+  filter {
+    name   = "transit-gateway-attachment-id"
+    values = [var.aws_transit_gw.vpc_attachment]
+  }
+  # ...
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "this" {
+  count = (var.aws_network_config.create_vpc || var.aws_transit_gw.vpc_attachment == "") && local.has_lan_interfaces ? 1 : 0
+  # ...
+}
+```
+
+#### Route Tables (`vpc.tf`)
+
+Route tables can be explicitly specified when reusing an existing VPC:
+
+```hcl
+resource "aws_route_table" "public" {
+  count = (var.aws_network_config.create_vpc || var.aws_network_config.route_table.public == "") ? 1 : 0
+  # ...
+}
+
+locals {
+  public_rt_id = var.aws_network_config.route_table.public != "" ? var.aws_network_config.route_table.public : try(aws_route_table.public[0].id, "")
+}
+```
+
+#### Example: Using All Existing Resources
+
+```hcl
+aws_network_config = {
+  create_vpc = false
+  vpc_id     = "vpc-0abc123def456"
+  region     = "us-east-1"
+  route_table = {
+    public  = "rtb-0abc123"
+    private = "rtb-0def456"
+  }
+}
+
+aws_transit_gw = {
+  create_transit_gw = false
+  tgw_id            = "tgw-0abc123def456"
+  vpc_attachment    = "tgw-attach-0abc123"  # Optional: reuse existing attachment
+}
+```
+
+#### Important Notes
+
+1. **Subnets are always created** — Even when reusing a VPC, the module creates new subnets for the gateways. This ensures proper isolation and consistent naming.
+
+2. **TGW Connect is always created** — The TGW Connect attachment and Connect Peers are always created by the module, even when reusing an existing TGW.
+
+3. **VPC attachment subnet limitation** — When reusing an existing TGW VPC attachment, you may need to manually update its subnet list due to an [AWS API limitation](https://github.com/hashicorp/terraform-provider-aws/issues) that prevents modifying attachment subnets via Terraform.
 
 ## Provider Internals
 
 ### Netskope BWAN Provider
 
-The `netskopebwan` provider (v0.0.2, source: `netskopeoss/netskopebwan`) communicates with the Netskope SD-WAN REST API.
+The `netskopebwan` provider (source: `netskopeoss/netskopebwan`) communicates with the Netskope SD-WAN REST API.
 
-**Base URL derivation** (in `provider.tf`):
+**Credential Resolution** (in `provider.tf`):
+
+The provider credentials can come from environment variables or the `netskope_tenant` object. Environment variables take precedence:
+
 ```hcl
 locals {
-  tenant_url_parts = split(".", replace(var.netskope_tenant.tenant_url, "https://", ""))
-  api_url = "https://${local.tenant_url_parts[0]}.api.${join(".", slice(local.tenant_url_parts, 1, length(local.tenant_url_parts)))}"
+  tenant_url   = coalesce(var.netskope_api_url, var.netskope_tenant.tenant_url)
+  tenant_token = coalesce(var.netskope_api_token, var.netskope_tenant.tenant_token)
 }
 ```
 
-Example: `https://example.infiot.net` → `https://example.api.infiot.net`
+**API URL Transformation**:
+
+The Netskope SD-WAN API uses a different hostname than the tenant portal. The code transforms the tenant URL by inserting `api` as the second segment:
+
+```hcl
+locals {
+  # Input: "https://example.infiot.net"
+  # Split by ".": ["https://example", "infiot", "net"]
+  netskope_tenant_url_slice = split(".", local.tenant_url)
+
+  # Insert "api" after the first segment:
+  # ["https://example"] + ["api"] + ["infiot", "net"]
+  tenant_api_url_slice = concat(
+    slice(local.netskope_tenant_url_slice, 0, 1),  # First segment
+    ["api"],                                        # Insert "api"
+    slice(local.netskope_tenant_url_slice, 1, length(local.netskope_tenant_url_slice))  # Rest
+  )
+
+  # Join back: "https://example.api.infiot.net"
+  tenant_api_url = join(".", local.tenant_api_url_slice)
+}
+```
+
+| Tenant URL | API URL |
+|------------|---------|
+| `https://example.infiot.net` | `https://example.api.infiot.net` |
+| `https://corp.stage0.infiot.net` | `https://corp.api.stage0.infiot.net` |
 
 ### API Propagation Delays
 
@@ -244,6 +410,12 @@ The `null_resource.gre_config` provisioner uses `local-exec` with AWS CLI to:
 3. Poll `ssm get-command-invocation` for Success/Failed/TimedOut
 
 This approach avoids needing direct SSH access to the gateways.
+
+### SSM Limitation: No Session Manager After Activation
+
+Once the Netskope BWAN gateway appliance is activated, SSM Session Manager (`aws ssm start-session`) and the `RunShellScript` document worker are non-functional. The SSM agent is running and reports "Online", but interactive shell sessions and shell-based command invocations fail silently or return errors. This appears to be a limitation of the appliance OS environment post-activation.
+
+**Workaround:** Use a bastion host in the same VPC to SSH into the gateways via their private LAN IPs (`ssh infiot@<gateway-lan-ip>`). The optional bastion module (`bastion.tf`) provides this. The `RunCommand` document for GRE configuration still works because it uses the `aws:runShellScript` plugin with explicit command strings rather than an interactive session.
 
 ## User-Data and Cloud-Init
 

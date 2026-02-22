@@ -35,14 +35,16 @@ sudo journalctl -u amazon-ssm-agent
 **Diagnostic steps**:
 
 ```sh
-# Check BGP state
+# Connect to the gateway via SSM
 aws ssm start-session --target <instance-id> --region <region>
-sudo docker exec -it infiot-router vtysh -c "show bgp summary"
 
-# Check if GRE tunnel is up
-sudo docker exec -it infiot-router vtysh -c "show interface gre1"
+# Check BGP state (inside infiot_spoke container)
+sudo docker exec -it infiot_spoke vtysh -c "show bgp summary"
 
-# Verify IP addressing on GRE tunnel
+# Check GRE tunnel interface (inside infiot_spoke container)
+sudo docker exec -it infiot_spoke vtysh -c "show interface gre1"
+
+# Verify IP addressing on GRE tunnel (on host)
 ip addr show gre1
 ```
 
@@ -50,15 +52,18 @@ ip addr show gre1
 - **Inside CIDR mismatch**: Verify the TGW Connect Peer's inside CIDR matches the gateway's GRE tunnel IPs. Check the `computed-gateway-map` output.
 - **ASN mismatch**: Ensure `tenant_bgp_asn` matches what the gateway advertises and `tgw_asn` matches the Transit Gateway's ASN.
 - **Security group blocking**: The private (LAN) security group allows all traffic. If using a custom SG, ensure GRE (protocol 47) is permitted.
-- **FRR container not running**: Check `sudo docker ps` — the `infiot-router` container must be running.
+- **FRR container not running**: Check `sudo docker ps` — the `infiot_spoke` container must be running.
 
 ### GRE Tunnel Down
 
 **Symptom**: GRE tunnel interface exists but no traffic passes.
 
-**Diagnostic steps**:
+**Diagnostic steps** (run on host after connecting via SSM):
 
 ```sh
+# Connect to the gateway via SSM
+aws ssm start-session --target <instance-id> --region <region>
+
 # Check tunnel endpoints
 ip tunnel show gre1
 
@@ -73,6 +78,82 @@ ip link show gre1   # Should show mtu 1300
 - **MTU issues**: The default MTU of 1300 should work. If seeing fragmentation issues, try lowering to 1200.
 - **Physical interface mismatch**: `phy_intfname` must match the LAN interface name on the BWAN AMI (default: `enp2s1`). Verify with `ip link show`.
 - **TGW Connect not active**: Check the TGW Connect attachment status in the AWS console.
+
+## Gateway Host Commands Reference
+
+These commands are run on the gateway host (not inside a container) after connecting via SSM:
+
+```sh
+aws ssm start-session --target <instance-id> --region <region>
+```
+
+### Network Diagnostics
+
+```sh
+# Show interfaces brief
+ip -br a
+
+# Ping with source interface
+ping <destination-ip> -I <interface-ip>
+
+# Check interface duplex and port status
+ethtool <interface-id>
+# Example: ethtool enps20fo
+
+# Show interface details (MAC addresses)
+ip address
+
+# Show system routing table (not the SD-WAN overlay routing table)
+ip route
+
+# Show ARP table
+ip neighbor
+```
+
+### Gateway Management
+
+```sh
+# Show Borderless WAN firmware version
+infhostd version
+
+# Upgrade firmware (replace with desired version)
+infhostd upgrade -displayname R5.3.97
+
+# Restart Borderless WAN container
+infhostd restart-container infiot_spoke
+
+# Reboot device (will be down for approx 2-5 min)
+reboot
+```
+
+### Flow Inspection
+
+```sh
+# Show flows (can also view in docker controller, pipe to grep for filtering)
+infhostd click-dump --help
+```
+
+## Container Commands Reference
+
+These commands are run inside the `infiot_spoke` container:
+
+```sh
+# Enter the container
+sudo docker exec -it infiot_spoke bash
+```
+
+### Overlay and Tunnels
+
+```sh
+# Show overlay paths and SSE/IPSEC tunnels to NewEdge
+/opt/infiot/bin/infcli.py --overlays
+
+# Show interfaces
+/opt/infiot/bin/infcli.py --show_int
+
+# Show routing table
+/opt/infiot/bin/infcli.py --rt
+```
 
 ### Terraform Destroy Failures
 

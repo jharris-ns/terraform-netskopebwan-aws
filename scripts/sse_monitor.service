@@ -1,0 +1,13 @@
+[Unit]
+Description=SSE Monitor - IPsec tunnel health monitor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /root/sse_monitor/sse_monitor.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
