@@ -136,7 +136,7 @@ The IAM principal running `terraform apply` needs permissions to create and mana
       ]
     },
     {
-      "Sid": "SSMForGREConfig",
+      "Sid": "SSMOperations",
       "Effect": "Allow",
       "Action": [
         "ssm:CreateDocument",
@@ -183,7 +183,7 @@ When running this module from a CI/CD pipeline:
 
 2. **Netskope API token**: Store the `tenant_token` as a secret (e.g., GitHub Actions secret, AWS Secrets Manager, HashiCorp Vault) and inject it via environment variable or `-var` flag. Do not commit it to version control.
 
-3. **SSM execution**: The `local-exec` provisioner in `gre_config.tf` runs AWS CLI commands from the Terraform runner. The pipeline environment must have:
+3. **SSM execution**: The `local-exec` provisioners in `gre_config.tf` and `sse_monitor.tf` call `scripts/ssm_send_command.sh`, which runs AWS CLI commands from the Terraform runner. The pipeline environment must have:
    - AWS CLI installed
    - Credentials available (same principal running Terraform)
    - Network access to the AWS SSM API endpoints

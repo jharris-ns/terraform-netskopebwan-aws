@@ -111,44 +111,13 @@ RETEOF
       PAYLOAD=$(cd "$TMPDIR" && tar czf - root etc | base64 | tr -d '\n')
       rm -rf "$TMPDIR"
 
-      # Poll for SSM readiness (up to 5 minutes, 10s intervals)
-      MAX_ATTEMPTS=30
-      ATTEMPT=0
-      STATUS="None"
-      while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-        STATUS=$(aws ssm describe-instance-information \
-          --region $REGION \
-          --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-          --query "InstanceInformationList[0].PingStatus" \
-          --output text 2>/dev/null || echo "None")
-        [ "$STATUS" = "Online" ] && break
-        ATTEMPT=$((ATTEMPT + 1))
-        sleep 10
-      done
-      [ "$STATUS" != "Online" ] && echo "SSM agent not ready on instance $INSTANCE_ID (gateway ${each.key})" && exit 1
-
-      # Send SSM command with base64 payload
-      COMMAND_ID=$(aws ssm send-command \
-        --region $REGION \
-        --instance-ids $INSTANCE_ID \
-        --document-name ${aws_ssm_document.sse_monitor.name} \
-        --parameters "{\"scriptPayload\":[\"$PAYLOAD\"]}" \
-        --comment "Deploy SSE monitor on gateway ${each.key}" \
-        --query "Command.CommandId" \
-        --output text)
-
-      # Wait for command completion
-      while true; do
-        CMD_STATUS=$(aws ssm get-command-invocation \
-          --region $REGION \
-          --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
-          --query Status --output text 2>/dev/null || echo "InProgress")
-        case "$CMD_STATUS" in
-          Success) echo "SSE monitor for gateway ${each.key} deployed successfully"; break ;;
-          Failed|Cancelled|TimedOut) echo "SSE monitor for gateway ${each.key} failed with status: $CMD_STATUS"; exit 1 ;;
-          *) sleep 5 ;;
-        esac
-      done
+      # Send SSM command via shared helper
+      ${path.module}/scripts/ssm_send_command.sh \
+        "$REGION" \
+        "$INSTANCE_ID" \
+        "${aws_ssm_document.sse_monitor.name}" \
+        "{\"scriptPayload\":[\"$PAYLOAD\"]}" \
+        "Deploy SSE monitor on gateway ${each.key}"
     EOT
   }
 }

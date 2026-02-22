@@ -160,14 +160,6 @@ resource "aws_ssm_document" "gre_config" {
             "        \"route-map To-Ctrlr-4 permit 10\",",
             "        \"set community 47474:47474 additive\"",
             "      ]",
-            "    },",
-            "    {",
-            "      \"frrCmds\": [",
-            "        \"conf t\",",
-            "        \"router bgp {{ bgpAsn }}\",",
-            "        \"neighbor {{ bgpPeer1 }} default-originate\",",
-            "        \"neighbor {{ bgpPeer2 }} default-originate\"",
-            "      ]",
             "    }",
             "  ]",
             "}",
@@ -263,31 +255,11 @@ resource "null_resource" "gre_config" {
 
   provisioner "local-exec" {
     command = <<-EOT
-      REGION="${var.aws_network_config.region}"
-      INSTANCE_ID="${each.value.instance_id}"
-
-      # Poll for SSM readiness (up to 5 minutes, 10s intervals)
-      MAX_ATTEMPTS=30
-      ATTEMPT=0
-      STATUS="None"
-      while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-        STATUS=$(aws ssm describe-instance-information \
-          --region $REGION \
-          --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
-          --query "InstanceInformationList[0].PingStatus" \
-          --output text 2>/dev/null || echo "None")
-        [ "$STATUS" = "Online" ] && break
-        ATTEMPT=$((ATTEMPT + 1))
-        sleep 10
-      done
-      [ "$STATUS" != "Online" ] && echo "SSM agent not ready on instance $INSTANCE_ID (gateway ${each.key})" && exit 1
-
-      # Send SSM command
-      COMMAND_ID=$(aws ssm send-command \
-        --region $REGION \
-        --instance-ids $INSTANCE_ID \
-        --document-name ${aws_ssm_document.gre_config.name} \
-        --parameters '${jsonencode({
+      ${path.module}/scripts/ssm_send_command.sh \
+        "${var.aws_network_config.region}" \
+        "${each.value.instance_id}" \
+        "${aws_ssm_document.gre_config.name}" \
+        '${jsonencode({
     insideIp    = [each.value.inside_ip]
     insideMask  = [each.value.inside_mask]
     localIp     = [each.value.local_ip]
@@ -301,22 +273,7 @@ resource "null_resource" "gre_config" {
     bgpMetric   = [each.value.bgp_metric]
     tgwAsn      = [var.aws_transit_gw.tgw_asn]
 })}' \
-        --comment "Configure GRE tunnel on gateway ${each.key}" \
-        --query "Command.CommandId" \
-        --output text)
-
-      # Wait for command completion
-      while true; do
-        CMD_STATUS=$(aws ssm get-command-invocation \
-          --region $REGION \
-          --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
-          --query Status --output text 2>/dev/null || echo "InProgress")
-        case "$CMD_STATUS" in
-          Success) echo "GRE config for gateway ${each.key} completed successfully"; break ;;
-          Failed|Cancelled|TimedOut) echo "GRE config for gateway ${each.key} failed with status: $CMD_STATUS"; exit 1 ;;
-          *) sleep 5 ;;
-        esac
-      done
+        "Configure GRE tunnel on gateway ${each.key}"
     EOT
 }
 }

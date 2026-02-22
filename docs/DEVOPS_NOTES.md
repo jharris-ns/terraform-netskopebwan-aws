@@ -398,18 +398,28 @@ locals {
 
 The GRE configuration is applied post-launch via an SSM Command document (`aws_ssm_document.gre_config`). The document has three steps:
 
-1. **writeFrrConfig** — Writes FRR configuration JSON to `/infroot/workdir/frrcmds-user.json`
+1. **writeFrrConfig** — Writes FRR configuration JSON to `/infroot/workdir/frrcmds-user.json` (community lists, prefix-lists, route-maps, BGP neighbor config — but **not** `default-originate`, which is controlled exclusively by the SSE monitor)
 2. **configureGRETunnel** — Runs `infhostd config-gre` and restarts the infhost container
 3. **verifyBgpConfig** — Polls `show bgp summary` in the FRR container until peers appear
 
 ### SSM Execution Flow
 
-The `null_resource.gre_config` provisioner uses `local-exec` with AWS CLI to:
-1. Poll `ssm describe-instance-information` until the agent reports "Online" (30 retries × 10s)
-2. Send the SSM command with gateway-specific parameters
-3. Poll `ssm get-command-invocation` for Success/Failed/TimedOut
+Both `gre_config.tf` and `sse_monitor.tf` use `null_resource` with a `local-exec` provisioner to invoke SSM commands during `terraform apply`. These are not triggered by AWS events or schedules — Terraform runs the script on the operator's machine as part of the apply, and the script calls the AWS SSM API to execute commands on the remote instances. Both delegate the SSM interaction to a shared helper script: `scripts/ssm_send_command.sh`.
 
-This approach avoids needing direct SSH access to the gateways.
+**`scripts/ssm_send_command.sh`** accepts five arguments:
+1. `REGION` — AWS region
+2. `INSTANCE_ID` — Target EC2 instance
+3. `DOCUMENT_NAME` — SSM document to execute
+4. `PARAMETERS` — JSON parameters string
+5. `COMMENT` — Descriptive comment for the SSM command
+
+The script:
+1. Polls `ssm describe-instance-information` until the agent reports "Online" (30 retries × 10s)
+2. Sends the SSM command with the provided parameters
+3. Polls `ssm get-command-invocation` for Success/Failed/TimedOut
+4. Exits 0 on success, 1 on failure
+
+This approach avoids needing direct SSH access to the gateways and eliminates duplicated shell logic between the two provisioners.
 
 ### SSM Limitation: No Session Manager After Activation
 
@@ -419,7 +429,7 @@ Once the Netskope BWAN gateway appliance is activated, SSM Session Manager (`aws
 
 ## SSE Monitor
 
-The SSE monitor is a health-checking daemon deployed to each gateway that prevents traffic blackholing by controlling BGP default route advertisement based on IPsec tunnel state.
+The SSE monitor is a health-checking daemon deployed to each gateway that prevents traffic blackholing by controlling BGP default route advertisement based on IPsec tunnel state. It is the **sole owner** of `default-originate` — the GRE config intentionally omits it so that the default route is only advertised after the monitor confirms tunnels are healthy.
 
 ### How It Works
 
@@ -483,7 +493,7 @@ The `ikectl frrcmds` command applies these to the FRR routing daemon inside the 
 
 ### Deployment via SSM (`sse_monitor.tf`)
 
-Unlike `gre_config.tf` which passes parameters to an SSM document, `sse_monitor.tf` builds a base64-encoded tar archive locally and sends it as a single SSM parameter:
+Unlike `gre_config.tf` which passes parameters to an SSM document, `sse_monitor.tf` builds a base64-encoded tar archive locally and sends it as a single SSM parameter. Both use `scripts/ssm_send_command.sh` for the SSM readiness polling, command send, and completion polling:
 
 1. **Local build** — Creates a temp directory mirroring the target filesystem:
    - `/root/sse_monitor/sse_monitor.sh` (copied from `scripts/`)

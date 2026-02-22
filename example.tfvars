@@ -93,3 +93,19 @@ tags = {
 clients = {
   create_clients = true
 }
+
+#------------------------------------------------------------------------------
+#  Alternative: Use existing VPC and TGW
+#  Uncomment the blocks below and comment out the corresponding blocks above.
+#------------------------------------------------------------------------------
+
+# aws_network_config = {
+#   create_vpc = false
+#   vpc_id     = "vpc-064378cc401df95e5"
+#   region     = "ap-southeast-2"
+# }
+
+# aws_transit_gw = {
+#   create_transit_gw = false
+#   tgw_id            = "tgw-084a9cb2bf3d8484f"
+# }
