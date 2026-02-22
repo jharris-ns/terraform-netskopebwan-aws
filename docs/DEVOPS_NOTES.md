@@ -417,13 +417,111 @@ Once the Netskope BWAN gateway appliance is activated, SSM Session Manager (`aws
 
 **Workaround:** Use a bastion host in the same VPC to SSH into the gateways via their private LAN IPs (`ssh infiot@<gateway-lan-ip>`). The optional bastion module (`bastion.tf`) provides this. The `RunCommand` document for GRE configuration still works because it uses the `aws:runShellScript` plugin with explicit command strings rather than an interactive session.
 
+## SSE Monitor
+
+The SSE monitor is a health-checking daemon deployed to each gateway that prevents traffic blackholing by controlling BGP default route advertisement based on IPsec tunnel state.
+
+### How It Works
+
+The monitor (`scripts/sse_monitor.sh`) runs as an infinite loop with a simple state machine:
+
+```
+                    ┌──────────────┐
+          startup → │   unknown    │
+                    └──────┬───────┘
+                           │ wait for container + stabilize
+                    ┌──────▼───────┐
+         tunnels UP │  advertised  │◄──── applies frrcmds-advertise-default.json
+                    └──────┬───────┘
+                           │ tunnels DOWN or container stopped
+                    ┌──────▼───────┐
+       tunnels DOWN │  retracted   │◄──── applies frrcmds-retract-default.json
+                    └──────────────┘
+```
+
+1. **Wait for container** — Polls `docker inspect` until `infiot_spoke` is running
+2. **Stabilization** — Waits 30s for tunnels to establish after container start
+3. **Poll loop** (every 10s):
+   - If container stopped → retract default route, wait for restart
+   - If `ikectl status` shows `ESTABLISHED` → advertise default route
+   - If no tunnels established → retract default route
+4. State changes are idempotent — FRR config is only applied on transitions
+
+### FRR JSON Files
+
+The monitor controls BGP by copying JSON command files into the `infiot_spoke` container and executing them via `ikectl frrcmds`. These files are generated per-gateway by `sse_monitor.tf` with the correct BGP peer IPs.
+
+**`frrcmds-advertise-default.json`** — Tells both TGW BGP peers to originate a default route:
+```json
+{
+  "frrCmdSets": [{
+    "frrCmds": [
+      "conf t",
+      "router bgp <tenant_bgp_asn>",
+      "neighbor <peer1> default-originate",
+      "neighbor <peer2> default-originate"
+    ]
+  }]
+}
+```
+
+**`frrcmds-retract-default.json`** — Removes default route advertisement:
+```json
+{
+  "frrCmdSets": [{
+    "frrCmds": [
+      "conf t",
+      "router bgp <tenant_bgp_asn>",
+      "no neighbor <peer1> default-originate",
+      "no neighbor <peer2> default-originate"
+    ]
+  }]
+}
+```
+
+The `ikectl frrcmds` command applies these to the FRR routing daemon inside the container via `vtysh`.
+
+### Deployment via SSM (`sse_monitor.tf`)
+
+Unlike `gre_config.tf` which passes parameters to an SSM document, `sse_monitor.tf` builds a base64-encoded tar archive locally and sends it as a single SSM parameter:
+
+1. **Local build** — Creates a temp directory mirroring the target filesystem:
+   - `/root/sse_monitor/sse_monitor.sh` (copied from `scripts/`)
+   - `/root/sse_monitor/frrcmds-advertise-default.json` (generated with per-gateway BGP peers)
+   - `/root/sse_monitor/frrcmds-retract-default.json` (generated with per-gateway BGP peers)
+   - `/etc/systemd/system/sse_monitor.service` (copied from `scripts/`)
+   - `/etc/logrotate.d/sse_monitor` (copied from `scripts/`)
+2. **Tar + base64** — `tar czf - root etc | base64` produces a single string
+3. **SSM send** — The SSM document extracts the payload with `base64 -d | tar xz -C /`
+4. **Enable** — `systemctl enable --now sse_monitor` starts the service immediately
+
+The `null_resource.sse_monitor` depends on `null_resource.gre_config` to ensure GRE tunnels and BGP peers are configured before the monitor starts checking tunnel health.
+
+### Systemd Service
+
+The service unit (`scripts/sse_monitor.service`) ensures the monitor:
+- Starts after Docker (`After=docker.service`, `Requires=docker.service`)
+- Auto-restarts on crash (`Restart=always`, `RestartSec=10`)
+- Starts on boot (`WantedBy=multi-user.target`)
+
+### Log Rotation
+
+`scripts/sse_monitor.logrotate` rotates `/var/log/sse_monitor.log` at 100MB, keeping 3 compressed archives. Uses `copytruncate` so the running script doesn't need to be signalled.
+
 ## User-Data and Cloud-Init
 
 The EC2 user-data script (`scripts/user-data.sh`) is a cloud-config YAML that:
 1. Sets the gateway console password
 2. Provides the Netskope activation URI and token (consumed by the BWAN image on first boot)
-3. Downloads and installs the SSM agent from the regional S3 bucket
-4. Enables and starts the SSM agent service
+3. **Pins the IMDS route** — Adds a `/32` host route for `169.254.169.254` to the primary ENI, preventing the Netskope overlay's `169.254.0.0/16` connected route from capturing metadata traffic (see IMDS Fix below)
+4. Downloads and installs the SSM agent from the regional S3 bucket
+5. Enables and starts the SSM agent service
+
+### IMDS Route Fix
+
+After gateway activation, the `infiot_spoke` container creates an overlay interface with an address in `169.254.0.0/16`. This adds a connected route that captures all link-local traffic — including `169.254.169.254` (EC2 Instance Metadata Service). Without the fix, the SSM agent cannot refresh IAM credentials and all SSM operations fail silently.
+
+The fix in user-data adds `ip route add 169.254.169.254/32 dev <primary-ENI>` at boot, before the overlay comes up. The `/32` host route always wins over the `/16` connected route via longest-prefix match. A networkd-dispatcher hook makes the route persistent across reboots.
 
 ## Variable Flow
 
@@ -446,6 +544,9 @@ Root variables (variables.tf)
     │
     ├──► gre_config.tf SSM document + null_resource per gateway
     │                  (references EC2 instance IDs, ENI IPs, TGW peer addresses)
+    │
+    ├──► sse_monitor.tf SSM document + null_resource per gateway
+    │                   (depends on gre_config, deploys health monitor + FRR JSON)
     │
     ├──► clients.tf    Optional client VPC + EC2 (conditional via count)
     │

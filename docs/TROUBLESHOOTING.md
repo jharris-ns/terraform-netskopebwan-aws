@@ -155,6 +155,97 @@ sudo docker exec -it infiot_spoke bash
 /opt/infiot/bin/infcli.py --rt
 ```
 
+### SSE Monitor Not Running
+
+**Symptom**: `systemctl status sse_monitor` shows inactive or failed on a gateway.
+
+**Diagnostic steps** (connect via bastion or SSM):
+
+```sh
+# Check service status and recent logs
+systemctl status sse_monitor
+journalctl -u sse_monitor --no-pager -n 50
+
+# Check the monitor log file
+tail -50 /var/log/sse_monitor.log
+
+# Verify all files are deployed
+ls -la /root/sse_monitor/
+cat /root/sse_monitor/frrcmds-advertise-default.json
+cat /root/sse_monitor/frrcmds-retract-default.json
+cat /etc/systemd/system/sse_monitor.service
+cat /etc/logrotate.d/sse_monitor
+```
+
+**Common causes**:
+- **Docker not running**: The service requires `docker.service`. Check `systemctl status docker`.
+- **Container not started**: The monitor waits indefinitely for `infiot_spoke`. Check `docker ps`.
+- **FRR JSON missing**: If the JSON files weren't deployed, the monitor logs `ERROR: <file> not found`.
+- **ikectl not available**: The `ikectl` binary is inside the container at `/opt/infiot/scripts/ikectl`. If the container image is corrupted, tunnel checks will fail.
+
+### SSE Monitor Running but Default Route Not Advertised
+
+**Symptom**: Monitor is active but BGP peers don't show `default-originate`.
+
+**Diagnostic steps**:
+
+```sh
+# Check monitor state from log
+grep -E '(Tunnels UP|Tunnels DOWN|advertise|retract)' /var/log/sse_monitor.log | tail -20
+
+# Check tunnel status manually
+docker exec infiot_spoke /opt/infiot/scripts/ikectl status
+
+# Verify BGP config inside container
+docker exec infiot_spoke vtysh -c "show bgp summary"
+docker exec infiot_spoke vtysh -c "show running-config" | grep default-originate
+```
+
+**Common causes**:
+- **No ESTABLISHED tunnels**: The monitor only advertises when `ikectl status` output contains `ESTABLISHED`. If IPsec tunnels to NewEdge are down, this is expected behaviour — the monitor is correctly retracting the default route.
+- **Wrong BGP peer IPs in JSON**: Check that the peer IPs in the JSON files match the TGW Connect Peer inside addresses from `terraform output computed-gateway-map`.
+- **ikectl frrcmds failing**: Check the monitor log for `FAIL(rc=...)` entries. This can happen if FRR is not running inside the container.
+
+### IMDS Unreachable After Activation
+
+**Symptom**: SSM commands fail with `context deadline exceeded` errors. The SSM agent reports Online but cannot execute documents.
+
+**Diagnostic steps** (connect via bastion SSH):
+
+```sh
+# Check IMDS route
+ip route get 169.254.169.254
+
+# Expected (working):
+#   169.254.169.254 dev enp2s0 src <primary-ip>
+
+# Broken (overlay capturing IMDS):
+#   169.254.169.254 dev overlay src 169.254.0.x
+
+# Test IMDS connectivity
+curl -s -m 5 http://169.254.169.254/latest/meta-data/instance-id
+
+# Check SSM agent errors
+tail -20 /var/log/amazon/ssm/errors.log
+```
+
+**Cause**: The `infiot_spoke` container creates an overlay interface with a `169.254.0.0/16` connected route that captures IMDS traffic (`169.254.169.254`). The SSM agent cannot refresh IAM credentials without IMDS access.
+
+**Resolution**: The `user-data.sh` script adds a `/32` host route for `169.254.169.254` pinned to the primary ENI at boot. If this route is missing (e.g., on instances deployed before the fix), add it manually:
+
+```sh
+# Identify primary ENI
+PRIMARY_ENI=$(ip -o link show | awk -F': ' '/^2:/{print $2}')
+
+# Add host route (takes effect immediately)
+ip route add 169.254.169.254/32 dev "$PRIMARY_ENI"
+
+# Verify
+curl -s http://169.254.169.254/latest/meta-data/instance-id
+```
+
+Note: Instances deployed before this fix require a redeploy (`terraform destroy` + `terraform apply`) for the user-data change to take effect.
+
 ### Terraform Destroy Failures
 
 **Symptom**: `terraform destroy` fails with dependency errors.
@@ -204,3 +295,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 5. **Sequential GRE configuration**: The `local-exec` provisioner for GRE config runs sequentially per gateway (not parallelized), as each invocation polls for completion.
 
 6. **Provider version pinning**: The `netskopebwan` provider is pinned to `0.0.2`. Newer versions may introduce breaking changes to resource schemas.
+
+7. **IMDS route hijacking**: The Netskope overlay interface (`169.254.0.0/16`) captures IMDS traffic post-activation. The `user-data.sh` IMDS route fix mitigates this, but if a future firmware update changes the overlay addressing or routing priority, the fix may need adjustment.
+
+8. **SSE monitor requires container**: The monitor depends on `infiot_spoke` running with `ikectl` available. If the container image changes or `ikectl` is moved/renamed in a firmware update, the monitor will log errors.
