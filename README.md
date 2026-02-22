@@ -9,6 +9,7 @@ Deploys and activates Netskope SD-WAN (BWAN) gateways in AWS with automated GRE 
 - Creates (or reuses) an AWS Transit Gateway with Connect attachments and BGP peering
 - Registers gateways in the Netskope SD-WAN portal (policy, interfaces, activation, BGP)
 - Configures GRE tunnels and FRR BGP sessions on each gateway via SSM
+- Deploys an IPsec tunnel health monitor (SSE monitor) that controls BGP default route advertisement based on tunnel state
 - Optionally deploys a client VPC for end-to-end testing
 
 ## Architecture
@@ -36,9 +37,9 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 
 ## Prerequisites
 
-- **Terraform** >= 0.13
+- **Terraform** >= 0.13 with providers: `aws ~> 4.30`, `netskopebwan 0.0.2`, `null ~> 3.0`, `time ~> 0.7.2`, `cloudposse/utils`
 - **AWS account** with permissions to create VPC, EC2, TGW, IAM, and SSM resources
-- **AWS CLI** installed (used by the GRE configuration provisioner)
+- **AWS CLI** installed and configured (supports SSO profiles via `AWS_PROFILE`; used by the GRE configuration provisioner)
 - **Netskope SD-WAN tenant** with tenant ID, tenant URL, and a REST API token
 
 ## Variables
@@ -46,8 +47,10 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `aws_network_config` | object | see below | VPC configuration (region, create/reuse, CIDR) |
-| `aws_transit_gw` | object | see below | Transit Gateway configuration (create/reuse, ASN, CIDR) |
+| `aws_transit_gw` | object | *required* | Transit Gateway configuration (create/reuse, ASN, CIDR) |
 | `netskope_tenant` | object | *required* | Tenant ID, URL, API token, BGP ASN |
+| `netskope_api_url` | string | `""` | Netskope tenant URL (overrides `netskope_tenant.tenant_url`; set via `TF_VAR_netskope_api_url`) |
+| `netskope_api_token` | string (sensitive) | `""` | Netskope API token (overrides `netskope_tenant.tenant_token`; set via `TF_VAR_netskope_api_token`) |
 | `netskope_gateway_config` | object | `{}` | Gateway policy name, password, model, DNS |
 | `aws_instance` | object | see below | EC2 instance type, key pair, AMI filter |
 | `gateway_count` | number | `2` | Number of gateways to deploy (1–4) |
@@ -96,8 +99,8 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `deployment_name` | string | *required* | Free-form string used in resource naming for identification (e.g., `"my-corp-prod"`) |
-| `tenant_url` | string | *required* | Tenant URL (e.g., `https://example.infiot.net`) |
-| `tenant_token` | string | *required* | REST API token |
+| `tenant_url` | string | `""` | Tenant URL (e.g., `https://example.infiot.net`; can be overridden by `netskope_api_url`) |
+| `tenant_token` | string | `""` | REST API token (can be overridden by `netskope_api_token`) |
 | `tenant_bgp_asn` | string | `"400"` | BGP ASN for gateways |
 
 </details>
@@ -162,6 +165,10 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 | [Operations](docs/OPERATIONS.md) | Day-2: scaling, gateway replacement, AMI upgrades, BGP verification |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues, diagnostic commands, known limitations |
 | [DevOps Notes](docs/DEVOPS_NOTES.md) | Internal patterns, provider details, variable flow |
+
+## License
+
+This project is licensed under the BSD 3-Clause License — see the [LICENSE](LICENSE) file for details.
 
 ## Support
 
