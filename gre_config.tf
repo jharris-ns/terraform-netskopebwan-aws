@@ -19,7 +19,9 @@ locals {
         peer1 = cidrhost(gw.inside_cidr, 2)
         peer2 = cidrhost(gw.inside_cidr, 3)
       }
-      bgp_metric = gw.bgp_metric
+      bgp_metric       = gw.bgp_metric
+      activation_token = netskopebwan_gateway_activate.gateways[gw_key].token
+      tenant_uri       = "https://${local.tenant_url}"
     }
   }
 }
@@ -87,8 +89,30 @@ resource "aws_ssm_document" "gre_config" {
         type        = "String"
         description = "Transit Gateway BGP ASN (remote-as)"
       }
+      activationToken = {
+        type        = "String"
+        description = "Gateway activation token"
+      }
+      tenantUri = {
+        type        = "String"
+        description = "Netskope tenant URI for activation"
+      }
     }
     mainSteps = [
+      {
+        action = "aws:runShellScript"
+        name   = "activateGateway"
+        inputs = {
+          runCommand = [
+            "#!/bin/bash",
+            "set -e",
+            "echo 'Activating gateway...'",
+            "infhostd activate -uri {{ tenantUri }} -token {{ activationToken }}",
+            "echo 'Gateway activated successfully. Waiting 30s for activation to propagate...'",
+            "sleep 30"
+          ]
+        }
+      },
       {
         action = "aws:runShellScript"
         name   = "writeFrrConfig"
@@ -248,9 +272,11 @@ resource "null_resource" "gre_config" {
     phy_intfname = each.value.phy_intfname
     bgp_asn      = var.netskope_tenant.tenant_bgp_asn
     tgw_asn      = var.aws_transit_gw.tgw_asn
-    bgp_peer1    = each.value.bgp_peers.peer1
-    bgp_peer2    = each.value.bgp_peers.peer2
-    bgp_metric   = each.value.bgp_metric
+    bgp_peer1         = each.value.bgp_peers.peer1
+    bgp_peer2         = each.value.bgp_peers.peer2
+    bgp_metric        = each.value.bgp_metric
+    activation_token  = each.value.activation_token
+    tenant_uri        = each.value.tenant_uri
   }
 
   provisioner "local-exec" {
@@ -270,8 +296,10 @@ resource "null_resource" "gre_config" {
     bgpAsn      = [var.netskope_tenant.tenant_bgp_asn]
     bgpPeer1    = [each.value.bgp_peers.peer1]
     bgpPeer2    = [each.value.bgp_peers.peer2]
-    bgpMetric   = [each.value.bgp_metric]
-    tgwAsn      = [var.aws_transit_gw.tgw_asn]
+    bgpMetric       = [each.value.bgp_metric]
+    tgwAsn          = [var.aws_transit_gw.tgw_asn]
+    activationToken = [each.value.activation_token]
+    tenantUri       = [each.value.tenant_uri]
 })}' \
         "Configure GRE tunnel on gateway ${each.key}"
     EOT

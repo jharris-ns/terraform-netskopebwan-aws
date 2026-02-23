@@ -1,47 +1,108 @@
 #!/bin/bash
-LOG_FILE=/var/log/sse_monitor.log
-CONTAINER_NAME=infiot_spoke
-STABILIZATION_TIME=30
-POLL_INTERVAL=10
+
+# Configuration
+CONTAINER_NAME="infiot_spoke"
+LOG_FILE="/var/log/sse_monitor.log"
+STABILIZATION_TIME=30  # Seconds to wait after restart for FRR to stabilize
 ADVERTISE_FILE=/root/sse_monitor/frrcmds-advertise-default.json
 RETRACT_FILE=/root/sse_monitor/frrcmds-retract-default.json
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> $LOG_FILE; }
+# Initialize tracking variables
+last_start_time=""
+retracted=0  # 0 = Advertised (Default), 1 = Retracted
 
-apply_frr_config() {
-  local f=$1 a=$2
-  [ ! -f "$f" ] && log "ERROR: $f not found" && return 1
-  log "Applying FRR config: $a"
-  docker cp "$f" "$CONTAINER_NAME:/tmp/frrcmds.json"
-  docker exec "$CONTAINER_NAME" /opt/infiot/scripts/ikectl frrcmds /tmp/frrcmds.json >> $LOG_FILE 2>&1
-  local rc=$?; [ $rc -eq 0 ] && log "OK: $a" || log "FAIL(rc=$rc): $a"; return $rc
-}
+echo "$(date) Process $$: Starting SSE Monitor for $CONTAINER_NAME..." >> $LOG_FILE
 
-check_tunnels() {
-  local s; s=$(docker exec $CONTAINER_NAME /opt/infiot/scripts/ikectl status 2>/dev/null) || return 1
-  echo "$s" | grep -q 'ESTABLISHED' && return 0 || return 1
-}
+while true
+do
+  # --------------------------------
+  # STEP 1: Check Container Status & Timestamp
+  # --------------------------------
 
-wait_for_container() {
-  while true; do
-    local r=$(docker inspect -f '{{.State.Running}}' $CONTAINER_NAME 2>/dev/null || echo false)
-    [ "$r" = "true" ] && log "Container running" && return 0
-    log "Waiting for container..."; sleep $POLL_INTERVAL
-  done
-}
+  current_start_time=$(docker inspect --format='{{.State.StartedAt}}' $CONTAINER_NAME 2>/dev/null)
 
-log "SSE Monitor starting..."; STATE=unknown
-wait_for_container; log "Stabilizing ${STABILIZATION_TIME}s..."; sleep $STABILIZATION_TIME
-while true; do
-  r=$(docker inspect -f '{{.State.Running}}' $CONTAINER_NAME 2>/dev/null || echo false)
-  if [ "$r" != "true" ]; then
-    [ "$STATE" != retracted ] && apply_frr_config $RETRACT_FILE retract && STATE=retracted
-    wait_for_container; sleep $STABILIZATION_TIME; continue
+  # If empty, the container is down. Wait and retry.
+  if [ -z "$current_start_time" ]; then
+    echo "$(date) Container $CONTAINER_NAME not found/down. Waiting..." >> $LOG_FILE
+    sleep 10
+    continue
   fi
-  if check_tunnels; then
-    [ "$STATE" != advertised ] && log "Tunnels UP" && apply_frr_config $ADVERTISE_FILE advertise && STATE=advertised
+
+  # --------------------------------
+  # STEP 2: Detect Restart & Stabilize
+  # --------------------------------
+
+  if [ "$current_start_time" != "$last_start_time" ]; then
+    if [ -n "$last_start_time" ]; then
+      echo "$(date) RESTART DETECTED (New Start Time: $current_start_time)." >> $LOG_FILE
+    fi
+
+    echo "$(date) Waiting ${STABILIZATION_TIME}s for BGP/FRR to stabilize..." >> $LOG_FILE
+
+    # This sleep is CRITICAL. It lets FRR finish loading its default config.
+    sleep $STABILIZATION_TIME
+
+    # Reset our state tracker because a fresh container always starts advertising.
+    retracted=0
+
+    # Update the last known start time so we don't trigger this block again.
+    last_start_time="$current_start_time"
+
+    echo "$(date) Stabilization complete. Checking tunnels now." >> $LOG_FILE
+  fi
+
+  # --------------------------------
+  # STEP 3: Monitor Tunnels & Manage Route
+  # --------------------------------
+
+  # Get tunnel count safely
+  sse_tunnel_count=$(docker exec $CONTAINER_NAME ikectl show sa 2>/dev/null | grep ESTABLISHED | grep "IPV4/163" | wc -l)
+
+  # Safety check: if variable is empty, treat as 0
+  if [ -z "$sse_tunnel_count" ]; then sse_tunnel_count=0; fi
+
+  echo "$(date) Tunnel Count=$sse_tunnel_count" >> $LOG_FILE
+
+  if [ "$sse_tunnel_count" -eq 0 ]; then
+    # --- SCENARIO: TUNNELS DOWN ---
+
+    # If tunnels are down and we haven't retracted yet, DO IT.
+    if [ "$retracted" -eq 0 ]; then
+      echo "$(date) ACTION: Tunnels Down. Retracting default route..." >> $LOG_FILE
+
+      # Copy config into container and run
+      docker cp $RETRACT_FILE $CONTAINER_NAME:/tmp/frrcmds-retract-default.json
+      if docker exec $CONTAINER_NAME /opt/infiot/bin/gencfg -run-frr-cmds /tmp/frrcmds-retract-default.json >> $LOG_FILE 2>&1; then
+        retracted=1
+        echo "$(date) SUCCESS: Route Retracted." >> $LOG_FILE
+      else
+        echo "$(date) ERROR: Failed to retract route (Command failed)." >> $LOG_FILE
+      fi
+    else
+      echo "$(date) Route already retracted. No action." >> $LOG_FILE
+    fi
+
   else
-    [ "$STATE" != retracted ] && log "Tunnels DOWN" && apply_frr_config $RETRACT_FILE retract && STATE=retracted
+
+    # --- SCENARIO: TUNNELS UP ---
+
+    # If tunnels are up and we previously retracted, RE-ADVERTISE.
+    if [ "$retracted" -eq 1 ]; then
+      echo "$(date) ACTION: Tunnels Up. Re-advertising default route..." >> $LOG_FILE
+
+      docker cp $ADVERTISE_FILE $CONTAINER_NAME:/tmp/frrcmds-advertise-default.json
+      if docker exec $CONTAINER_NAME /opt/infiot/bin/gencfg -run-frr-cmds /tmp/frrcmds-advertise-default.json >> $LOG_FILE 2>&1; then
+        retracted=0
+        echo "$(date) SUCCESS: Route Advertised." >> $LOG_FILE
+      else
+        echo "$(date) ERROR: Failed to advertise route." >> $LOG_FILE
+      fi
+    fi
+
   fi
-  sleep $POLL_INTERVAL
+
+  sleep 10
+
 done
+
+# End Of Script #

@@ -9,7 +9,7 @@ locals {
   tenant_token              = coalesce(var.netskope_api_token, var.netskope_tenant.tenant_token)
   netskope_tenant_url_slice = split(".", local.tenant_url)
   tenant_api_url_slice      = concat(slice(local.netskope_tenant_url_slice, 0, 1), ["api"], slice(local.netskope_tenant_url_slice, 1, length(local.netskope_tenant_url_slice)))
-  tenant_api_url            = join(".", local.tenant_api_url_slice)
+  tenant_api_url            = "https://${join(".", local.tenant_api_url_slice)}"
 }
 
 provider "aws" {

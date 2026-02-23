@@ -31,7 +31,8 @@ resource "aws_ssm_document" "sse_monitor" {
             "echo '{{ scriptPayload }}' | base64 -d | tar xz -C /",
             "chmod 755 /root/sse_monitor/sse_monitor.sh",
             "systemctl daemon-reload",
-            "systemctl enable --now sse_monitor",
+            "systemctl enable sse_monitor",
+            "systemctl restart sse_monitor",
             "echo 'SSE monitor deployed successfully.'"
           ]
         }
@@ -84,6 +85,7 @@ resource "null_resource" "sse_monitor" {
       "frrCmds": [
         "conf t",
         "router bgp $BGP_ASN",
+        "address-family ipv4 unicast",
         "neighbor $BGP_PEER1 default-originate",
         "neighbor $BGP_PEER2 default-originate"
       ]
@@ -99,6 +101,7 @@ ADVEOF
       "frrCmds": [
         "conf t",
         "router bgp $BGP_ASN",
+        "address-family ipv4 unicast",
         "no neighbor $BGP_PEER1 default-originate",
         "no neighbor $BGP_PEER2 default-originate"
       ]
