@@ -69,7 +69,18 @@ locals {
 # --- Policy (shared across all gateways) ---
 
 resource "netskopebwan_policy" "multicloud" {
-  name = var.netskope_gateway_config.gateway_policy
+  count = var.netskope_gateway_config.create_policy ? 1 : 0
+  name  = var.netskope_gateway_config.gateway_policy
+}
+
+data "netskopebwan_policy" "existing" {
+  count = var.netskope_gateway_config.create_policy ? 0 : 1
+  name  = var.netskope_gateway_config.gateway_policy
+}
+
+locals {
+  policy_id   = var.netskope_gateway_config.create_policy ? netskopebwan_policy.multicloud[0].id : data.netskopebwan_policy.existing[0].id
+  policy_name = var.netskope_gateway_config.create_policy ? netskopebwan_policy.multicloud[0].name : data.netskopebwan_policy.existing[0].name
 }
 
 # --- Gateway Resources (one per gateway) ---
@@ -80,8 +91,8 @@ resource "netskopebwan_gateway" "gateways" {
   model    = var.netskope_gateway_config.gateway_model
   role     = each.value.gateway_role
   assigned_policy {
-    id   = resource.netskopebwan_policy.multicloud.id
-    name = resource.netskopebwan_policy.multicloud.name
+    id   = local.policy_id
+    name = local.policy_name
   }
 }
 

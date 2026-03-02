@@ -262,21 +262,21 @@ resource "null_resource" "gre_config" {
   depends_on = [aws_ssm_document.gre_config]
 
   triggers = {
-    instance_id  = each.value.instance_id
-    inside_ip    = each.value.inside_ip
-    inside_mask  = each.value.inside_mask
-    local_ip     = each.value.local_ip
-    remote_ip    = each.value.remote_ip
-    intf_name    = each.value.intf_name
-    mtu          = each.value.mtu
-    phy_intfname = each.value.phy_intfname
-    bgp_asn      = var.netskope_tenant.tenant_bgp_asn
-    tgw_asn      = var.aws_transit_gw.tgw_asn
-    bgp_peer1         = each.value.bgp_peers.peer1
-    bgp_peer2         = each.value.bgp_peers.peer2
-    bgp_metric        = each.value.bgp_metric
-    activation_token  = each.value.activation_token
-    tenant_uri        = each.value.tenant_uri
+    instance_id      = each.value.instance_id
+    inside_ip        = each.value.inside_ip
+    inside_mask      = each.value.inside_mask
+    local_ip         = each.value.local_ip
+    remote_ip        = each.value.remote_ip
+    intf_name        = each.value.intf_name
+    mtu              = each.value.mtu
+    phy_intfname     = each.value.phy_intfname
+    bgp_asn          = var.netskope_tenant.tenant_bgp_asn
+    tgw_asn          = var.aws_transit_gw.tgw_asn
+    bgp_peer1        = each.value.bgp_peers.peer1
+    bgp_peer2        = each.value.bgp_peers.peer2
+    bgp_metric       = each.value.bgp_metric
+    activation_token = each.value.activation_token
+    tenant_uri       = each.value.tenant_uri
   }
 
   provisioner "local-exec" {
@@ -286,16 +286,16 @@ resource "null_resource" "gre_config" {
         "${each.value.instance_id}" \
         "${aws_ssm_document.gre_config.name}" \
         '${jsonencode({
-    insideIp    = [each.value.inside_ip]
-    insideMask  = [each.value.inside_mask]
-    localIp     = [each.value.local_ip]
-    remoteIp    = [each.value.remote_ip]
-    intfName    = [each.value.intf_name]
-    mtu         = [each.value.mtu]
-    phyIntfname = [each.value.phy_intfname]
-    bgpAsn      = [var.netskope_tenant.tenant_bgp_asn]
-    bgpPeer1    = [each.value.bgp_peers.peer1]
-    bgpPeer2    = [each.value.bgp_peers.peer2]
+    insideIp        = [each.value.inside_ip]
+    insideMask      = [each.value.inside_mask]
+    localIp         = [each.value.local_ip]
+    remoteIp        = [each.value.remote_ip]
+    intfName        = [each.value.intf_name]
+    mtu             = [each.value.mtu]
+    phyIntfname     = [each.value.phy_intfname]
+    bgpAsn          = [var.netskope_tenant.tenant_bgp_asn]
+    bgpPeer1        = [each.value.bgp_peers.peer1]
+    bgpPeer2        = [each.value.bgp_peers.peer2]
     bgpMetric       = [each.value.bgp_metric]
     tgwAsn          = [var.aws_transit_gw.tgw_asn]
     activationToken = [each.value.activation_token]

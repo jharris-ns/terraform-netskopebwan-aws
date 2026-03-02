@@ -353,14 +353,19 @@ The `netskopebwan` provider (source: `netskopeoss/netskopebwan`) communicates wi
 
 **Credential Resolution** (in `provider.tf`):
 
-The provider credentials can come from environment variables or the `netskope_tenant` object. Environment variables take precedence:
+Standalone variables (`netskope_tenant_url`, `netskope_tenant_token`) override the corresponding fields in the `netskope_tenant` object via `coalesce()`. This lets CI/CD pipelines set `TF_VAR_netskope_tenant_url` and `TF_VAR_netskope_tenant_token` as individual secrets. The `https://` scheme is stripped so that downstream `"https://${local.tenant_url}"` references never double it:
 
 ```hcl
 locals {
-  tenant_url   = coalesce(var.netskope_api_url, var.netskope_tenant.tenant_url)
-  tenant_token = coalesce(var.netskope_api_token, var.netskope_tenant.tenant_token)
+  tenant_url_raw = trimprefix(trimprefix(
+    coalesce(var.netskope_tenant_url, var.netskope_tenant.tenant_url),
+    "https://"), "http://")
+  tenant_url   = local.tenant_url_raw
+  tenant_token = coalesce(var.netskope_tenant_token, var.netskope_tenant.tenant_token)
 }
 ```
+
+`netskope_tenant_token` is marked `sensitive = true` so Terraform redacts it from plan output.
 
 **API URL Transformation**:
 
@@ -368,27 +373,28 @@ The Netskope SD-WAN API uses a different hostname than the tenant portal. The co
 
 ```hcl
 locals {
-  # Input: "https://example.infiot.net"
-  # Split by ".": ["https://example", "infiot", "net"]
-  netskope_tenant_url_slice = split(".", local.tenant_url)
+  # Input (after scheme strip): "example.infiot.net"
+  # Split by ".": ["example", "infiot", "net"]
+  netskope_tenant_url_slice = split(".", local.tenant_url_raw)
 
   # Insert "api" after the first segment:
-  # ["https://example"] + ["api"] + ["infiot", "net"]
+  # ["example"] + ["api"] + ["infiot", "net"]
   tenant_api_url_slice = concat(
     slice(local.netskope_tenant_url_slice, 0, 1),  # First segment
     ["api"],                                        # Insert "api"
     slice(local.netskope_tenant_url_slice, 1, length(local.netskope_tenant_url_slice))  # Rest
   )
 
-  # Join back: "https://example.api.infiot.net"
-  tenant_api_url = join(".", local.tenant_api_url_slice)
+  # Prepend scheme and join: "https://example.api.infiot.net"
+  tenant_api_url = "https://${join(".", local.tenant_api_url_slice)}"
 }
 ```
 
-| Tenant URL | API URL |
-|------------|---------|
-| `https://example.infiot.net` | `https://example.api.infiot.net` |
-| `https://corp.stage0.infiot.net` | `https://corp.api.stage0.infiot.net` |
+| Tenant URL (input) | `local.tenant_url` | API URL |
+|---------------------|---------------------|---------|
+| `https://example.infiot.net` | `example.infiot.net` | `https://example.api.infiot.net` |
+| `example.infiot.net` | `example.infiot.net` | `https://example.api.infiot.net` |
+| `https://corp.stage0.infiot.net` | `corp.stage0.infiot.net` | `https://corp.api.stage0.infiot.net` |
 
 ### API Propagation Delays
 

@@ -126,14 +126,14 @@ variable "netskope_tenant" {
   })
 }
 
-variable "netskope_api_url" {
-  description = "Netskope tenant URL. Set via TF_VAR_netskope_api_url env var."
+variable "netskope_tenant_url" {
+  description = "Netskope tenant URL. Overrides netskope_tenant.tenant_url. Set via TF_VAR_netskope_tenant_url env var."
   type        = string
   default     = ""
 }
 
-variable "netskope_api_token" {
-  description = "Netskope API token. Set via TF_VAR_netskope_api_token env var."
+variable "netskope_tenant_token" {
+  description = "Netskope REST API token. Overrides netskope_tenant.tenant_token. Set via TF_VAR_netskope_tenant_token env var."
   type        = string
   sensitive   = true
   default     = ""
@@ -144,6 +144,7 @@ variable "netskope_gateway_config" {
   type = object({
     gateway_password = optional(string, "infiot")
     gateway_policy   = optional(string, "test")
+    create_policy    = optional(bool, true)
     gateway_model    = optional(string, "iXVirtual")
     dns_primary      = optional(string, "8.8.8.8")
     dns_secondary    = optional(string, "8.8.4.4")
@@ -186,7 +187,7 @@ variable "clients" {
   description = "Optional Client / Host VPC configuration"
   type = object({
     create_clients = optional(bool, false)
-    client_ami     = optional(string, "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server")
+    client_ami     = optional(string, "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server")
     vpc_cidr       = optional(string, "192.168.255.0/28")
     instance_type  = optional(string, "t3.small")
     password       = optional(string, "infiot")

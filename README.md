@@ -37,7 +37,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 
 ## Prerequisites
 
-- **Terraform** >= 0.13 with providers: `aws ~> 4.30`, `netskopebwan 0.0.2`, `null ~> 3.0`, `time ~> 0.7.2`, `cloudposse/utils`
+- **Terraform** >= 1.3 with providers: `aws ~> 4.30`, `netskopebwan 0.0.2`, `null ~> 3.0`, `time ~> 0.7.2`, `cloudposse/utils`
 - **AWS account** with permissions to create VPC, EC2, TGW, IAM, and SSM resources
 - **AWS CLI** installed and configured (supports SSO profiles via `AWS_PROFILE`; used by the GRE configuration provisioner)
 - **Netskope SD-WAN tenant** with tenant ID, tenant URL, and a REST API token
@@ -48,9 +48,9 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 |---|---|---|---|
 | `aws_network_config` | object | see below | VPC configuration (region, create/reuse, CIDR) |
 | `aws_transit_gw` | object | *required* | Transit Gateway configuration (create/reuse, ASN, CIDR) |
-| `netskope_tenant` | object | *required* | Tenant ID, URL, API token, BGP ASN |
-| `netskope_api_url` | string | `""` | Netskope tenant URL (overrides `netskope_tenant.tenant_url`; set via `TF_VAR_netskope_api_url`) |
-| `netskope_api_token` | string (sensitive) | `""` | Netskope API token (overrides `netskope_tenant.tenant_token`; set via `TF_VAR_netskope_api_token`) |
+| `netskope_tenant` | object | *required* | Tenant credentials: deployment name, URL, API token, BGP ASN |
+| `netskope_tenant_url` | string | `""` | Tenant URL override (set via `TF_VAR_netskope_tenant_url` env var) |
+| `netskope_tenant_token` | string (sensitive) | `""` | API token override (set via `TF_VAR_netskope_tenant_token` env var) |
 | `netskope_gateway_config` | object | `{}` | Gateway policy name, password, model, DNS |
 | `aws_instance` | object | see below | EC2 instance type, key pair, AMI filter |
 | `gateway_count` | number | `2` | Number of gateways to deploy (1–4) |
@@ -99,8 +99,8 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `deployment_name` | string | *required* | Free-form string used in resource naming for identification (e.g., `"my-corp-prod"`) |
-| `tenant_url` | string | `""` | Tenant URL (e.g., `https://example.infiot.net`; can be overridden by `netskope_api_url`) |
-| `tenant_token` | string | `""` | REST API token (can be overridden by `netskope_api_token`) |
+| `tenant_url` | string | `""` | Tenant URL (e.g., `https://example.infiot.net`). The scheme is stripped automatically — with or without `https://` works. |
+| `tenant_token` | string | `""` | REST API token from the Netskope SD-WAN portal |
 | `tenant_bgp_asn` | string | `"400"` | BGP ASN for gateways |
 
 </details>
@@ -164,6 +164,7 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 | [State Management](docs/STATE_MANAGEMENT.md) | Remote backend setup (S3 + DynamoDB) |
 | [Operations](docs/OPERATIONS.md) | Day-2: scaling, gateway replacement, AMI upgrades, BGP verification |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues, diagnostic commands, known limitations |
+| [CloudShell](docs/CLOUDSHELL.md) | Deploying from AWS CloudShell |
 | [DevOps Notes](docs/DEVOPS_NOTES.md) | Internal patterns, provider details, variable flow |
 
 ## License

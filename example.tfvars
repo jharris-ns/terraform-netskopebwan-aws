@@ -64,11 +64,13 @@ netskope_tenant = {
 
 # Netskope gateway shared configuration
 # - gateway_policy: policy name assigned to all gateways
+# - create_policy: true to create a new policy, false to use an existing one (default: true)
 # - gateway_password: console login password (default: infiot)
 # - gateway_model: gateway model type (default: iXVirtual)
 # - dns_primary/dns_secondary: DNS servers for gateway interfaces
 netskope_gateway_config = {
   gateway_policy = "aws-gw-ap2"
+  # create_policy = false  # Set to false to use an existing policy instead of creating one
 }
 
 # AWS EC2 instance configuration
@@ -91,7 +93,7 @@ tags = {
 # - create_clients: set true to deploy a test client instance
 # - ports: list of ports to forward through the gateway
 clients = {
-  create_clients = true
+  create_clients = false
 }
 
 #------------------------------------------------------------------------------

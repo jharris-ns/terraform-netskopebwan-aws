@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - **AWS CLI** configured with credentials that have sufficient permissions (see [IAM Permissions](IAM_PERMISSIONS.md))
-- **Terraform** >= 0.13 installed
+- **Terraform** >= 1.3 installed
 - **Netskope SD-WAN tenant** with:
   - Tenant ID (from Netskope team)
   - Tenant URL (e.g., `https://example.infiot.net`)
@@ -51,18 +51,11 @@ When running on EC2 with an attached IAM role, no configuration is needed. The p
 
 ### Netskope Authentication
 
-Netskope API credentials can be provided via environment variables or in `terraform.tfvars`. Environment variables take precedence.
+The `https://` scheme on `tenant_url` is optional — it is stripped automatically to prevent URL duplication.
 
-#### Environment Variables (recommended for CI/CD and security)
+#### Option A: Variables file
 
-```sh
-export TF_VAR_netskope_api_url="https://your-tenant.infiot.net"
-export TF_VAR_netskope_api_token="your-api-token"
-```
-
-#### Variables File
-
-Alternatively, set credentials in `terraform.tfvars`:
+Set credentials in the `netskope_tenant` object in `terraform.tfvars`:
 
 ```hcl
 netskope_tenant = {
@@ -73,7 +66,25 @@ netskope_tenant = {
 }
 ```
 
-**Security note**: Environment variables are preferred for sensitive values like API tokens to avoid committing credentials to version control.
+#### Option B: Environment variables (recommended for CI/CD)
+
+Set the tenant URL and API token as individual environment variables. These override the corresponding fields in the `netskope_tenant` object:
+
+```sh
+export TF_VAR_netskope_tenant_url="https://your-tenant.infiot.net"
+export TF_VAR_netskope_tenant_token="your-api-token"
+```
+
+The `netskope_tenant` block in your `.tfvars` still needs `deployment_name` (and optionally `tenant_bgp_asn`):
+
+```hcl
+netskope_tenant = {
+  deployment_name = "my-deployment"
+  tenant_bgp_asn  = "400"
+}
+```
+
+`netskope_tenant_token` is marked `sensitive = true`, so Terraform redacts it from plan output.
 
 ## Configuration Walkthrough
 
@@ -90,11 +101,9 @@ cp example.tfvars terraform.tfvars
 | Field | Description |
 |---|---|
 | `deployment_name` | Free-form string used in resource naming for identification (e.g., `"my-corp-prod"`) |
-| `tenant_url` | Full URL of your tenant (e.g., `https://example.infiot.net`). Can be set via `TF_VAR_netskope_api_url` env var. |
-| `tenant_token` | REST API token from the Netskope SD-WAN portal. Can be set via `TF_VAR_netskope_api_token` env var. |
+| `tenant_url` | Full URL of your tenant (e.g., `https://example.infiot.net`). The `https://` scheme is optional. |
+| `tenant_token` | REST API token from the Netskope SD-WAN portal |
 | `tenant_bgp_asn` | BGP ASN for the gateways (default: `"400"`) |
-
-**Note**: When using environment variables (`TF_VAR_netskope_api_url` and `TF_VAR_netskope_api_token`), the `tenant_url` and `tenant_token` fields in `netskope_tenant` can be left empty or omitted.
 
 #### `aws_network_config`
 
@@ -128,6 +137,7 @@ cp example.tfvars terraform.tfvars
 | `aws_instance.instance_type` | `"t3.medium"` | EC2 instance type |
 | `aws_instance.keypair` | `""` | EC2 key pair name for SSH access |
 | `netskope_gateway_config.gateway_policy` | `"test"` | Netskope policy name |
+| `netskope_gateway_config.create_policy` | `true` | `true` to create a new policy, `false` to look up an existing one by name |
 | `clients.create_clients` | `false` | Deploy optional client VPC for testing |
 
 ## Deployment Paths
@@ -180,17 +190,13 @@ cd terraform-netskopebwan-aws
 cp example.tfvars terraform.tfvars
 # Edit terraform.tfvars with your values
 
-# 3. Set credentials
-
-# AWS (choose one method)
+# 3. Set AWS credentials (choose one method)
 export AWS_PROFILE="my-sso-profile"          # SSO or named profile
 # OR
 export AWS_ACCESS_KEY_ID="AKIA..."           # Access keys
 export AWS_SECRET_ACCESS_KEY="..."
 
-# Netskope
-export TF_VAR_netskope_api_url="https://your-tenant.infiot.net"
-export TF_VAR_netskope_api_token="your-api-token"
+# Netskope credentials are set in terraform.tfvars (netskope_tenant block)
 
 # 4. Initialize Terraform
 terraform init
@@ -252,10 +258,8 @@ All AWS resources receive tags from two sources:
 To tear down the entire deployment:
 
 ```sh
-# Ensure credentials are set (same as deployment)
+# Ensure AWS credentials are set (same as deployment)
 export AWS_PROFILE="my-sso-profile"
-export TF_VAR_netskope_api_url="https://your-tenant.infiot.net"
-export TF_VAR_netskope_api_token="your-api-token"
 
 terraform destroy -var-file=terraform.tfvars
 ```

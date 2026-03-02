@@ -26,11 +26,10 @@ aws_transit_gw = {
 }
 
 netskope_tenant = {
-  deployment_name = "my-corp-prod"   # Free-form string used in resource naming
+  deployment_name = "my-corp-prod"                  # Free-form string used in resource naming
+  tenant_url      = "https://example.infiot.net"    # Or set TF_VAR_netskope_tenant_url env var
+  tenant_token    = "YOUR_API_TOKEN"                # Or set TF_VAR_netskope_tenant_token env var
   tenant_bgp_asn  = "400"
-  # tenant_url and tenant_token can be set here or via environment variables:
-  # export TF_VAR_netskope_api_url="https://example.infiot.net"
-  # export TF_VAR_netskope_api_token="YOUR_API_TOKEN"
 }
 
 netskope_gateway_config = {
@@ -70,14 +69,14 @@ export AWS_PROFILE="my-profile"
 
 ### Netskope Authentication
 
-Set the Netskope API credentials via environment variables:
+Set `tenant_url` and `tenant_token` in the `netskope_tenant` block of your `terraform.tfvars` (shown in step 1 above), or use environment variables to keep secrets out of version control:
 
 ```sh
-export TF_VAR_netskope_api_url="https://your-tenant.infiot.net"
-export TF_VAR_netskope_api_token="your-api-token"
+export TF_VAR_netskope_tenant_url="https://example.infiot.net"
+export TF_VAR_netskope_tenant_token="YOUR_API_TOKEN"
 ```
 
-These override any values set in `terraform.tfvars` for `netskope_tenant.tenant_url` and `netskope_tenant.tenant_token`.
+These override the corresponding fields in the `netskope_tenant` object.
 
 ## 3. Deploy
 
