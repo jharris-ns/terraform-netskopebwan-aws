@@ -9,7 +9,7 @@ RETRACT_FILE=/root/sse_monitor/frrcmds-retract-default.json
 
 # Initialize tracking variables
 last_start_time=""
-retracted=0  # 0 = Advertised (Default), 1 = Retracted
+retracted=1  # 0 = Advertised, 1 = Retracted (start retracted to force initial advertise)
 
 echo "$(date) Process $$: Starting SSE Monitor for $CONTAINER_NAME..." >> $LOG_FILE
 
@@ -42,8 +42,9 @@ do
     # This sleep is CRITICAL. It lets FRR finish loading its default config.
     sleep $STABILIZATION_TIME
 
-    # Reset our state tracker because a fresh container always starts advertising.
-    retracted=0
+    # Start in retracted state so the monitor always pushes the advertise config
+    # when tunnels are up. This handles both fresh boots and container restarts.
+    retracted=1
 
     # Update the last known start time so we don't trigger this block again.
     last_start_time="$current_start_time"
@@ -56,7 +57,7 @@ do
   # --------------------------------
 
   # Get tunnel count safely
-  sse_tunnel_count=$(docker exec $CONTAINER_NAME ikectl show sa 2>/dev/null | grep ESTABLISHED | grep "IPV4/163" | wc -l)
+  sse_tunnel_count=$(docker exec $CONTAINER_NAME ikectl show sa 2>/dev/null | grep "^iked_sas:.*ESTABLISHED" | wc -l)
 
   # Safety check: if variable is empty, treat as 0
   if [ -z "$sse_tunnel_count" ]; then sse_tunnel_count=0; fi

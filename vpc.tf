@@ -327,12 +327,12 @@ resource "aws_route" "tgw_route" {
 }
 
 resource "aws_ec2_transit_gateway_connect" "this" {
-  count                   = local.has_lan_interfaces ? 1 : 0
+  for_each                = local.gw_lan_key
   transport_attachment_id = local.tgw_attachment_id
   transit_gateway_id      = local.tgw.id
 
   tags = {
-    Name = join("-", ["tgw_connect", var.netskope_tenant.deployment_name])
+    Name = join("-", ["tgw_connect", each.key, var.netskope_tenant.deployment_name])
   }
   depends_on = [time_sleep.vpc_api_delay]
 }
