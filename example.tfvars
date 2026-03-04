@@ -24,19 +24,11 @@ az_count = 2
 # EC2 instance Name tags become: {gateway_prefix}-{n}-{deployment_name}
 gateway_prefix = "aws-gw-ap2"
 
-# Environment prefix for resource naming (e.g. VPC, TGW, security groups)
-# environment = "prod"
-
-# Role assigned to all gateways (hub or spoke)
-# gateway_role = "hub"
-
-# Base /24 link-local CIDR from which /29 blocks are carved per gateway
-# Gateway 1 gets first /29, gateway 2 gets second /29, etc.
-# inside_cidr_base = "169.254.100.0/24"
-
-# Prefix length for auto-generated gateway subnets carved from vpc_cidr
-# Each gateway gets 2 subnets (ge1 public, ge2 LAN) of this size
-# subnet_size = 28
+# Optional overrides (defaults shown) — uncomment to customize:
+# environment      = "netskope"          # prefix for resource names (VPC, TGW, security groups)
+# gateway_role     = "hub"               # role assigned to all gateways (hub or spoke)
+# inside_cidr_base = "169.254.100.0/24"  # link-local /24 from which /29 blocks are carved per gateway
+# subnet_size      = 28                  # prefix length for auto-generated gateway subnets
 
 # AWS Transit Gateway configuration
 # - create_transit_gw: set true to create a new TGW, false to use existing
@@ -55,7 +47,7 @@ aws_transit_gw = {
 # - tenant_bgp_asn: BGP ASN used by gateways (default: 400)
 #
 # Secrets (tenant_url, tenant_token) must be set via environment variables:
-#   export TF_VAR_netskope_tenant_url="https://example.infiot.net"
+#   export TF_VAR_netskope_tenant_url="example.infiot.net"   # with or without https://
 #   export TF_VAR_netskope_tenant_token="YOUR_API_TOKEN"
 netskope_tenant = {
   deployment_name = "60675"
@@ -90,8 +82,8 @@ tags = {
 }
 
 # Optional test client deployment
-# - create_clients: set true to deploy a test client instance
-# - ports: list of ports to forward through the gateway
+# - create_clients: set true to deploy a test client instance in a separate VPC
+# - ports: security group ingress ports allowed on the test client instance
 clients = {
   create_clients = false
 }
@@ -110,4 +102,5 @@ clients = {
 # aws_transit_gw = {
 #   create_transit_gw = false
 #   tgw_id            = "tgw-084a9cb2bf3d8484f"
+#   vpc_attachment     = "tgw-attach-0c8453e5a81175a07"  # optional: reuse existing VPC attachment
 # }
