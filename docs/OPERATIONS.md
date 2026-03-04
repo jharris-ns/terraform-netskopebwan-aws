@@ -60,7 +60,38 @@ For BGP and GRE tunnel verification, refer to the Netskope documentation for con
 
 ## Re-Running GRE Configuration
 
-If GRE/BGP configuration needs to be re-applied (e.g., after a gateway reboot that lost configuration), taint the `gre_config` resource and re-apply via Terraform (see Gateway Replacement above).
+If GRE/BGP configuration needs to be re-applied (e.g., after a gateway reboot that lost configuration, or after a firmware upgrade that reset the tunnel), taint the `gre_config` resource for the affected gateway and re-apply:
+
+```sh
+# Re-run GRE/BGP configuration for a specific gateway
+terraform taint 'null_resource.gre_config["aws-gw-1"]'
+terraform apply -var-file=terraform.tfvars
+```
+
+This re-executes the SSM document on the gateway, which:
+1. Re-activates the gateway with the Netskope tenant
+2. Writes the FRR BGP configuration (`frrcmds-user.json`) with TGW Connect peer addresses and MED values
+3. Configures the GRE tunnel interface (`gre1`) with the correct local/remote IPs and MTU
+4. Restarts the `infiot_spoke` container and verifies BGP neighbors appear
+
+The SSE monitor is a separate resource. If it also needs re-deploying (e.g., the monitor script or FRR advertise/retract JSON files were lost):
+
+```sh
+terraform taint 'null_resource.sse_monitor["aws-gw-1"]'
+terraform apply -var-file=terraform.tfvars
+```
+
+To re-run both on all gateways, taint each gateway key individually — wildcard tainting is not supported:
+
+```sh
+terraform taint 'null_resource.gre_config["aws-gw-1"]'
+terraform taint 'null_resource.gre_config["aws-gw-2"]'
+terraform taint 'null_resource.sse_monitor["aws-gw-1"]'
+terraform taint 'null_resource.sse_monitor["aws-gw-2"]'
+terraform apply -var-file=terraform.tfvars
+```
+
+**Note**: The GRE config step includes gateway activation (`infhostd activate`). If the gateway is already activated, the activation step is idempotent — it will succeed without side effects.
 
 ## Monitoring Recommendations
 

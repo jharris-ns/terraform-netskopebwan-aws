@@ -2,6 +2,10 @@
 
 Minimal steps to deploy Netskope SD-WAN gateways in AWS.
 
+## Prerequisites
+
+Terraform >= 1.3, AWS CLI configured, and a Netskope SD-WAN tenant with an API token.
+
 ## 1. Clone and Configure
 
 ```sh
@@ -26,9 +30,7 @@ aws_transit_gw = {
 }
 
 netskope_tenant = {
-  deployment_name = "my-corp-prod"                  # Free-form string used in resource naming
-  tenant_url      = "https://example.infiot.net"    # Or set TF_VAR_netskope_tenant_url env var
-  tenant_token    = "YOUR_API_TOKEN"                # Or set TF_VAR_netskope_tenant_token env var
+  deployment_name = "my-corp-prod"    # Free-form string used in resource naming
   tenant_bgp_asn  = "400"
 }
 
@@ -43,40 +45,26 @@ aws_instance = {
 
 ## 2. Set Credentials
 
-### AWS Authentication
+### AWS
 
-Choose one of the following methods:
+> **CloudShell users:** AWS credentials are provided automatically — skip to Netskope below.
 
-**Option A: AWS SSO Profile (recommended)**
 ```sh
-# Login to SSO first
+# SSO (recommended)
 aws sso login --profile my-sso-profile
-
-# Set the profile
 export AWS_PROFILE="my-sso-profile"
-```
 
-**Option B: IAM Access Keys**
-```sh
+# OR access keys
 export AWS_ACCESS_KEY_ID="AKIA..."
 export AWS_SECRET_ACCESS_KEY="..."
 ```
 
-**Option C: Named Profile (credentials file)**
-```sh
-export AWS_PROFILE="my-profile"
-```
-
-### Netskope Authentication
-
-Set `tenant_url` and `tenant_token` in the `netskope_tenant` block of your `terraform.tfvars` (shown in step 1 above), or use environment variables to keep secrets out of version control:
+### Netskope
 
 ```sh
 export TF_VAR_netskope_tenant_url="https://example.infiot.net"
 export TF_VAR_netskope_tenant_token="YOUR_API_TOKEN"
 ```
-
-These override the corresponding fields in the `netskope_tenant` object.
 
 ## 3. Deploy
 
@@ -86,9 +74,9 @@ terraform plan -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
 ```
 
-## 4. Expected Outputs
+## 4. Verify
 
-After a successful apply, you will see:
+After a successful apply you will see output like:
 
 ```
 gateways = {
@@ -96,22 +84,14 @@ gateways = {
     gre_configured = true
     instance_id    = "i-0abc123..."
   }
-  "aws-gw-2" = {
-    gre_configured = true
-    instance_id    = "i-0def456..."
-  }
 }
-
-computed-gateway-map = { ... }    # Full computed configuration
-gre-config-ssm-document = "my-aws-policy_netskope_gre_config"
 ```
 
-## 5. Verification
-
-Check gateway status in the Netskope SD-WAN portal — gateways should appear as activated. For BGP and GRE tunnel verification, refer to the Netskope documentation for connection and diagnostics via the Netskope console.
+Check gateway status in the Netskope SD-WAN portal — gateways should appear as activated.
 
 ## Next Steps
 
-- See [Deployment Guide](DEPLOYMENT_GUIDE.md) for detailed configuration options
-- See [Architecture](ARCHITECTURE.md) for network topology details
-- See [Operations](OPERATIONS.md) for day-2 procedures
+- [Deployment Guide](DEPLOYMENT_GUIDE.md) — All configuration options and variable reference
+- [CloudShell](CLOUDSHELL.md) — Browser-based deployment from AWS CloudShell
+- [Architecture](ARCHITECTURE.md) — Network topology details
+- [Operations](OPERATIONS.md) — Day-2 procedures

@@ -1,155 +1,141 @@
 # Deployment Guide
 
+Comprehensive configuration reference and deployment instructions for Netskope SD-WAN gateways in AWS. For a minimal "get deployed fast" walkthrough, see the [Quick Start](QUICKSTART.md).
+
 ## Prerequisites
 
-- **AWS CLI** configured with credentials that have sufficient permissions (see [IAM Permissions](IAM_PERMISSIONS.md))
-- **Terraform** >= 1.3 installed
-- **Netskope SD-WAN tenant** with:
-  - Tenant ID (from Netskope team)
-  - Tenant URL (e.g., `https://example.infiot.net`)
-  - REST API token (created in the Netskope SD-WAN portal)
-- **AWS EC2 key pair** created in the target region (optional, for SSH access)
+- **Terraform** >= 1.3
+- **AWS CLI** configured with sufficient permissions (see [IAM Permissions](IAM_PERMISSIONS.md))
+- **Netskope SD-WAN tenant** with a REST API token (created in the SD-WAN portal)
+- **AWS EC2 key pair** in the target region (optional, for SSH access)
 
 ## Authentication
 
-### AWS Authentication
+### AWS
 
-The AWS provider uses the standard AWS SDK credential chain. Configure credentials using one of these methods:
+The AWS provider uses the standard SDK credential chain. Use any of these methods:
 
-#### Option 1: AWS SSO Profile (recommended for interactive use)
+| Method | Setup |
+|---|---|
+| **SSO Profile** (recommended) | `aws configure sso`, then `aws sso login --profile my-sso-profile` and `export AWS_PROFILE="my-sso-profile"` |
+| **IAM Access Keys** | `export AWS_ACCESS_KEY_ID="AKIA..."` and `export AWS_SECRET_ACCESS_KEY="..."` (optionally `AWS_SESSION_TOKEN` for temporary credentials) |
+| **Named Profile** | `export AWS_PROFILE="my-profile"` (reads `~/.aws/credentials`) |
+| **Instance Role** | No configuration needed — the provider uses the EC2 instance metadata service automatically |
 
-```sh
-# Configure SSO (one-time setup)
-aws configure sso
-# Follow prompts to set up your SSO profile
+### Netskope
 
-# Login to SSO before running Terraform
-aws sso login --profile my-sso-profile
-
-# Set the profile environment variable
-export AWS_PROFILE="my-sso-profile"
-```
-
-#### Option 2: IAM Access Keys
-
-```sh
-export AWS_ACCESS_KEY_ID="AKIA..."
-export AWS_SECRET_ACCESS_KEY="..."
-# Optional: export AWS_SESSION_TOKEN="..." (for temporary credentials)
-```
-
-#### Option 3: Named Profile (shared credentials file)
-
-```sh
-# Uses profile from ~/.aws/credentials
-export AWS_PROFILE="my-profile"
-```
-
-#### Option 4: IAM Instance Role
-
-When running on EC2 with an attached IAM role, no configuration is needed. The provider automatically uses the instance metadata service.
-
-### Netskope Authentication
-
-The `https://` scheme on `tenant_url` is optional — it is stripped automatically to prevent URL duplication.
-
-#### Option A: Variables file
-
-Set credentials in the `netskope_tenant` object in `terraform.tfvars`:
-
-```hcl
-netskope_tenant = {
-  deployment_name = "my-deployment"
-  tenant_url      = "https://your-tenant.infiot.net"
-  tenant_token    = "your-api-token"
-  tenant_bgp_asn  = "400"
-}
-```
-
-#### Option B: Environment variables (recommended for CI/CD)
-
-Set the tenant URL and API token as individual environment variables. These override the corresponding fields in the `netskope_tenant` object:
+Set the tenant URL and API token as environment variables to keep secrets out of version control:
 
 ```sh
 export TF_VAR_netskope_tenant_url="https://your-tenant.infiot.net"
 export TF_VAR_netskope_tenant_token="your-api-token"
 ```
 
-The `netskope_tenant` block in your `.tfvars` still needs `deployment_name` (and optionally `tenant_bgp_asn`):
+The `https://` scheme on `tenant_url` is optional — it is stripped automatically to prevent URL duplication. `netskope_tenant_token` is marked `sensitive = true`, so Terraform redacts it from plan output.
 
-```hcl
-netskope_tenant = {
-  deployment_name = "my-deployment"
-  tenant_bgp_asn  = "400"
-}
-```
+These override the corresponding fields in the `netskope_tenant` object. The remaining fields (`deployment_name`, `tenant_bgp_asn`) are set in `terraform.tfvars`.
 
-`netskope_tenant_token` is marked `sensitive = true`, so Terraform redacts it from plan output.
+## Configuration Reference
 
-## Configuration Walkthrough
-
-Copy one of the example files as your starting point:
+Copy the example file as your starting point:
 
 ```sh
 cp example.tfvars terraform.tfvars
 ```
 
-### Required Variables
+### `netskope_tenant`
 
-#### `netskope_tenant`
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `deployment_name` | Yes | — | Free-form string used in resource naming (e.g., `"my-corp-prod"`) |
+| `tenant_bgp_asn` | No | `"400"` | BGP ASN for the gateways |
 
-| Field | Description |
-|---|---|
-| `deployment_name` | Free-form string used in resource naming for identification (e.g., `"my-corp-prod"`) |
-| `tenant_url` | Full URL of your tenant (e.g., `https://example.infiot.net`). The `https://` scheme is optional. |
-| `tenant_token` | REST API token from the Netskope SD-WAN portal |
-| `tenant_bgp_asn` | BGP ASN for the gateways (default: `"400"`) |
+> **Note:** `tenant_url` and `tenant_token` are set via environment variables (`TF_VAR_netskope_tenant_url`, `TF_VAR_netskope_tenant_token`), not in tfvars.
 
-#### `aws_network_config`
+### `aws_network_config`
 
-| Field | Description |
-|---|---|
-| `region` | AWS region for deployment (default: `"us-east-1"`) |
-| `create_vpc` | `true` to create a new VPC, `false` to use existing |
-| `vpc_id` | Required when `create_vpc = false` |
-| `vpc_cidr` | VPC CIDR block (required when `create_vpc = true`) |
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `region` | No | `"us-east-1"` | AWS region for deployment |
+| `create_vpc` | Yes | — | `true` to create a new VPC, `false` to use existing |
+| `vpc_id` | When `create_vpc = false` | — | ID of existing VPC |
+| `vpc_cidr` | When `create_vpc = true` | — | CIDR block for the VPC; gateway subnets are auto-carved from this |
+| `route_table` | No | — | Existing route table IDs (auto-created if omitted) |
 
-#### `aws_transit_gw`
+### `aws_transit_gw`
 
-| Field | Description |
-|---|---|
-| `create_transit_gw` | `true` to create a new TGW, `false` to use existing |
-| `tgw_id` | Required when `create_transit_gw = false` |
-| `tgw_asn` | BGP ASN for the Transit Gateway (default: `"64512"`). Must be a private ASN (16-bit: 1–65534 or 32-bit: 131072–4199999999). AWS reserves 7224 and 9059. Must not conflict with `tenant_bgp_asn`. |
-| `tgw_cidr` | CIDR block assigned to the TGW for Connect Peer addressing (required when `create_transit_gw = true`). Must be RFC 1918 or CG-NAT (`100.64.0.0/10`) space and must not overlap with any VPC CIDR attached to the TGW. |
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `create_transit_gw` | Yes | — | `true` to create a new TGW, `false` to use existing |
+| `tgw_id` | When `create_transit_gw = false` | — | ID of existing Transit Gateway |
+| `tgw_asn` | No | `"64512"` | BGP ASN for the TGW. Must be a private ASN (16-bit: 1–65534 or 32-bit: 131072–4199999999). AWS reserves 7224 and 9059. Must not conflict with `tenant_bgp_asn`. |
+| `tgw_cidr` | When `create_transit_gw = true` | — | CIDR block for TGW Connect Peer addressing. Must be RFC 1918 or CG-NAT (`100.64.0.0/10`) and must not overlap with any VPC CIDR attached to the TGW. |
+| `phy_intfname` | No | — | Physical interface name on the gateway for GRE underlay |
 
-### Optional Variables
+### `netskope_gateway_config`
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `gateway_policy` | Yes | `"test"` | Netskope policy name assigned to all gateways |
+| `create_policy` | No | `true` | `true` to create a new policy, `false` to look up an existing one by name. A new policy is created in the Netskope SD-WAN portal with the name from `gateway_policy` and default settings — all gateways in the deployment share this single policy. Use `false` when you have a pre-configured policy with custom routing or security rules. |
+| `gateway_password` | No | `"infiot"` | Console login password |
+| `gateway_model` | No | `"iXVirtual"` | Gateway model type |
+| `dns_primary` | No | — | Primary DNS server for gateway interfaces |
+| `dns_secondary` | No | — | Secondary DNS server for gateway interfaces |
+
+### `aws_instance`
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `keypair` | No | `""` | EC2 key pair name for SSH access |
+| `instance_type` | No | `"t3.medium"` | EC2 instance type |
+| `ami_name` | No | — | AMI name filter for gateway image |
+| `ami_owner` | No | — | AMI owner account ID |
+
+### Standalone Variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `gateway_count` | `2` | Number of gateways (1–4) |
-| `az_count` | `2` | Number of AZs to distribute gateways across |
-| `gateway_prefix` | `"aws-gw"` | Naming prefix for gateway identifiers |
+| `gateway_count` | `2` | Number of gateways (default 2, tested up to 4). Each gateway gets its own TGW Connect attachment with a single Connect peer; ECMP load balancing is achieved across attachments via BGP. The max of 4 is a soft limit in the validation and can be increased. See [Scaling](#scaling). |
+| `az_count` | `2` | Number of AZs to distribute gateways across (round-robin) |
+| `gateway_prefix` | `"aws-gw"` | Naming prefix for gateway identifiers (keys become `{prefix}-1`, `{prefix}-2`, etc.) |
 | `gateway_role` | `"hub"` | Gateway role (`hub` or `spoke`) |
-| `environment` | `"netskope"` | Prefix for resource naming |
-| `subnet_size` | `28` | Prefix length for auto-generated subnets |
+| `environment` | `"netskope"` | Prefix for resource naming (VPC, TGW, security groups) |
+| `subnet_size` | `28` | Prefix length for auto-generated subnets carved from `vpc_cidr` |
 | `inside_cidr_base` | `"169.254.100.0/24"` | Base link-local CIDR for GRE inside addresses. Must be within `169.254.0.0/16`. Avoid `169.254.169.0/24` (EC2 metadata) and `169.254.170.0/24` (AWS reserved). |
-| `aws_instance.instance_type` | `"t3.medium"` | EC2 instance type |
-| `aws_instance.keypair` | `""` | EC2 key pair name for SSH access |
-| `netskope_gateway_config.gateway_policy` | `"test"` | Netskope policy name |
-| `netskope_gateway_config.create_policy` | `true` | `true` to create a new policy, `false` to look up an existing one by name |
-| `clients.create_clients` | `false` | Deploy optional client VPC for testing |
+
+### `tags`
+
+Common tags applied to all AWS resources via provider `default_tags`:
+
+```hcl
+tags = {
+  ManagedBy   = "terraform"
+  Environment = "production"
+  Project     = "netskope-bwan"
+  Owner       = "network-team"
+}
+```
+
+These merge with per-resource `Name` tags set individually using the environment prefix and resource identifiers.
+
+### `clients`
+
+| Field | Default | Description |
+|---|---|---|
+| `create_clients` | `false` | Deploy an optional client VPC for testing |
+| `ports` | — | List of ports to forward through the gateway |
 
 ## Deployment Paths
 
-### Path 1: New VPC + New Transit Gateway
+### New VPC + New Transit Gateway
 
-Use this when deploying into a fresh AWS environment. See `example.tfvars` for a complete reference.
+Use when deploying into a fresh AWS environment:
 
 ```hcl
 aws_network_config = {
   create_vpc = true
-  region     = "ap-southeast-2"
+  region     = "us-east-1"
   vpc_cidr   = "172.32.0.0/16"
 }
 
@@ -160,9 +146,9 @@ aws_transit_gw = {
 }
 ```
 
-### Path 2: Existing VPC + Existing Transit Gateway
+### Existing VPC + Existing Transit Gateway
 
-Use this when integrating into an established network. See `example2.tfvars` for a complete reference.
+Use when integrating into an established network:
 
 ```hcl
 aws_network_config = {
@@ -177,36 +163,25 @@ aws_transit_gw = {
 }
 ```
 
-**Note**: When reusing an existing VPC attachment, you may need to manually update the subnet list in the TGW VPC attachment due to an [AWS API limitation](https://github.com/hashicorp/terraform-provider-aws/issues).
+**Note**: When reusing an existing VPC attachment, you may need to manually add the new gateway LAN subnets to it — the AWS API does not support in-place subnet updates via Terraform. Add them with the CLI or Console:
+
+```sh
+aws ec2 modify-transit-gateway-vpc-attachment \
+  --transit-gateway-attachment-id tgw-attach-0abc123... \
+  --add-subnet-ids subnet-111aaa subnet-222bbb
+```
+
+The subnet IDs are the ge2 (LAN) subnets Terraform created, one per AZ — find them in `terraform output` or `terraform state list`.
+
+**Note**: When the project creates a new TGW, it enables `default_route_table_association` and `default_route_table_propagation`, so all attachments (gateway VPC, Connect, and client VPC) are automatically associated and propagated on the default TGW route table. When using an existing TGW, you are responsible for ensuring the TGW route table has the correct associations and propagations for the gateway VPC attachment and Connect attachments. Without these, BGP routes from the gateways will not appear in the TGW route table and traffic will not be forwarded.
 
 ## Step-by-Step Deployment
 
-```sh
-# 1. Clone the repository
-git clone <repository-url>
-cd terraform-netskopebwan-aws
-
-# 2. Configure your variables
-cp example.tfvars terraform.tfvars
-# Edit terraform.tfvars with your values
-
-# 3. Set AWS credentials (choose one method)
-export AWS_PROFILE="my-sso-profile"          # SSO or named profile
-# OR
-export AWS_ACCESS_KEY_ID="AKIA..."           # Access keys
-export AWS_SECRET_ACCESS_KEY="..."
-
-# Netskope credentials are set in terraform.tfvars (netskope_tenant block)
-
-# 4. Initialize Terraform
-terraform init
-
-# 5. Preview changes
-terraform plan -var-file=terraform.tfvars
-
-# 6. Deploy
-terraform apply -var-file=terraform.tfvars
-```
+1. Clone the repository and create `terraform.tfvars` (see [Quick Start](QUICKSTART.md))
+2. Set AWS and Netskope credentials (see [Authentication](#authentication) above)
+3. Run `terraform init`
+4. Run `terraform plan -var-file=terraform.tfvars` to preview changes
+5. Run `terraform apply -var-file=terraform.tfvars` to deploy
 
 The deployment creates resources in this order:
 1. VPC, subnets, security groups, TGW infrastructure
@@ -218,16 +193,34 @@ The GRE configuration step polls for SSM agent availability (up to 5 minutes) an
 
 ## Scaling
 
+### ECMP Architecture
+
+Each gateway is deployed with its own dedicated TGW Connect attachment and a single Connect peer. This differs from the alternative approach of placing multiple Connect peers on a single attachment. The per-gateway attachment model enables ECMP load balancing across attachments — all gateways advertise the same prefixes with matching BGP AS-PATH attributes, so the TGW distributes traffic equally across all active paths.
+
+```
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Gateway 1  │────▶│ Connect Attach 1 │────▶│                 │
+│  (1 Peer)   │     │  (1 Peer)        │     │                 │
+├─────────────┤     ├──────────────────┤     │  Transit        │
+│  Gateway 2  │────▶│ Connect Attach 2 │────▶│  Gateway        │
+│  (1 Peer)   │     │  (1 Peer)        │     │  (ECMP across   │
+├─────────────┤     ├──────────────────┤     │   attachments)  │
+│  Gateway N  │────▶│ Connect Attach N │────▶│                 │
+│  (1 Peer)   │     │  (1 Peer)        │     │                 │
+└─────────────┘     └──────────────────┘     └─────────────────┘
+```
+
 ### Changing Gateway Count
 
-Adjust `gateway_count` (1–4) to add or remove gateways. The module automatically:
+Adjust `gateway_count` to add or remove gateways. The default is 2 and the project has been tested with up to 4. The validation limit of 4 is a soft cap that can be increased in `variables.tf` — there is no hard AWS limit on the number of Connect attachments per TGW (the general attachment quota is 5,000). The project automatically:
+- Creates a dedicated TGW Connect attachment per gateway
 - Computes subnet CIDRs for new gateways
 - Assigns availability zones round-robin
 - Creates TGW Connect Peers with unique inside CIDRs
 - Sets equal BGP MED values for ECMP load balancing across all gateways
 
 ```hcl
-gateway_count = 4   # Deploy 4 gateways (max per TGW Connect attachment)
+gateway_count = 4   # Tested up to 4; increase validation in variables.tf for more
 az_count      = 2   # Spread across 2 AZs
 ```
 
@@ -237,33 +230,14 @@ Set `az_count` to control how many availability zones are used. Gateways are dis
 - `az_count = 1`: All gateways in one AZ
 - `az_count = 2`: Alternating AZs (gw-1 in AZ-a, gw-2 in AZ-b, gw-3 in AZ-a, ...)
 
-## Tagging Strategy
-
-All AWS resources receive tags from two sources:
-
-1. **Provider default tags** — set via the `tags` variable, applied to every resource:
-   ```hcl
-   tags = {
-     ManagedBy   = "terraform"
-     Environment = "production"
-     Project     = "netskope-bwan"
-     Owner       = "network-team"
-   }
-   ```
-
-2. **Resource-level `Name` tags** — set individually per resource using the environment prefix and resource identifiers.
-
 ## Destruction
 
 To tear down the entire deployment:
 
 ```sh
-# Ensure AWS credentials are set (same as deployment)
-export AWS_PROFILE="my-sso-profile"
-
 terraform destroy -var-file=terraform.tfvars
 ```
 
-This removes all AWS resources and Netskope portal configuration created by the module. The Netskope gateway entries are deactivated and deleted via the provider.
+This removes all AWS resources and Netskope portal configuration created by the project. The Netskope gateway entries are deactivated and deleted via the provider.
 
 **Caution**: If other resources (e.g., additional TGW attachments, route table entries) were manually added to the VPC or Transit Gateway outside of Terraform, remove them before running `terraform destroy` to avoid dependency errors.

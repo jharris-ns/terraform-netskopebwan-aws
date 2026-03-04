@@ -50,15 +50,15 @@ aws_transit_gw = {
   tgw_cidr          = "192.0.1.0/24"
 }
 
-# Netskope tenant credentials
+# Netskope tenant configuration
 # - deployment_name: used in resource Name tags as a suffix
-# - tenant_url: Netskope tenant URL for gateway activation
-# - tenant_token: activation token for gateway registration
 # - tenant_bgp_asn: BGP ASN used by gateways (default: 400)
+#
+# Secrets (tenant_url, tenant_token) must be set via environment variables:
+#   export TF_VAR_netskope_tenant_url="https://example.infiot.net"
+#   export TF_VAR_netskope_tenant_token="YOUR_API_TOKEN"
 netskope_tenant = {
   deployment_name = "60675"
-  tenant_url      = "https://example.infiot.net"
-  tenant_token    = "WzEwPSJd"
   tenant_bgp_asn  = "400"
 }
 

@@ -1,8 +1,34 @@
-# Netskope SD-WAN Gateway — AWS Terraform Module
+# Netskope SD-WAN Gateway — AWS Terraform Project
 
-Deploys and activates Netskope SD-WAN (BWAN) gateways in AWS with automated GRE tunnel and BGP peering through an AWS Transit Gateway. The module handles the full lifecycle: VPC networking, Netskope portal configuration, EC2 instance provisioning, and post-launch GRE/BGP setup via SSM.
+Deploys and activates Netskope SD-WAN (BWAN) gateways in AWS with automated GRE tunnel and BGP peering through an AWS Transit Gateway. This project handles the full lifecycle: VPC networking, Netskope portal configuration, EC2 instance provisioning, and post-launch GRE/BGP setup via SSM.
 
-## What This Module Does
+## When to Use This Project
+
+This project implements Netskope Borderless SD-WAN with BGP/GRE — the recommended approach for steering AWS workload traffic through Netskope for security inspection. It is transparent to applications: no agents, no code changes, no per-instance configuration.
+
+### How It Works
+
+BWAN Gateways run as EC2 instances in a dedicated Gateway VPC, connected to your application VPCs via AWS Transit Gateway. Each gateway establishes GRE tunnels to Netskope NewEdge Data Planes and runs BGP sessions over those tunnels to exchange routing information. Spoke VPC route tables direct internet-bound traffic (0.0.0.0/0) to the TGW, which forwards it to the gateways for inspection by Netskope.
+
+### ECMP and Scaling
+
+Each gateway originates a default route (0.0.0.0/0) over its BGP session to the Transit Gateway, advertising it with equal MED values across all gateways. Spoke VPC route tables point 0.0.0.0/0 at the TGW, and the TGW route table forwards this traffic to the Gateway VPC. Because each gateway gets its own dedicated TGW Connect attachment with a single Connect peer, and all gateways advertise the same prefix with matching AS-PATH and MED, the Transit Gateway distributes traffic across all gateways using Equal-Cost Multi-Path (ECMP) routing. This provides both load balancing and automatic failover — if a gateway goes down, its BGP session drops and the TGW immediately reroutes traffic to the remaining healthy gateways.
+
+The default deployment uses 2 gateways. The project has been tested with up to 4. The validation limit of 4 is a soft cap that can be increased in `variables.tf` — there is no hard AWS limit on the number of Connect attachments per TGW.
+### Applicable Workloads
+
+Any AWS workload that routes outbound traffic via a default route (0.0.0.0/0) through the Transit Gateway — application servers, containers, batch jobs, legacy systems — benefits from Netskope inspection without modification.
+
+### Key Benefits
+
+- **No agents required** — works with any OS, container runtime, or serverless function
+- **Transparent to applications** — no code or configuration changes on servers
+- **Supports web and non-web traffic** inspection (with Cloud Firewall)
+- **Centralized security** for entire VPCs without per-instance management
+- **Private IP visibility** preserved for logging and policy enforcement
+- **Automatic failover** via BGP — no manual intervention when a gateway fails
+
+## What This Project Does
 
 - Provisions 1–4 Netskope SD-WAN gateways distributed across availability zones
 - Creates (or reuses) a VPC with public/private subnets, security groups, and an Internet Gateway
@@ -42,108 +68,6 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 - **AWS CLI** installed and configured (supports SSO profiles via `AWS_PROFILE`; used by the GRE configuration provisioner)
 - **Netskope SD-WAN tenant** with tenant ID, tenant URL, and a REST API token
 
-## Variables
-
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `aws_network_config` | object | see below | VPC configuration (region, create/reuse, CIDR) |
-| `aws_transit_gw` | object | *required* | Transit Gateway configuration (create/reuse, ASN, CIDR) |
-| `netskope_tenant` | object | *required* | Tenant credentials: deployment name, URL, API token, BGP ASN |
-| `netskope_tenant_url` | string | `""` | Tenant URL override (set via `TF_VAR_netskope_tenant_url` env var) |
-| `netskope_tenant_token` | string (sensitive) | `""` | API token override (set via `TF_VAR_netskope_tenant_token` env var) |
-| `netskope_gateway_config` | object | `{}` | Gateway policy name, password, model, DNS |
-| `aws_instance` | object | see below | EC2 instance type, key pair, AMI filter |
-| `gateway_count` | number | `2` | Number of gateways to deploy (1–4) |
-| `az_count` | number | `2` | Number of AZs for gateway distribution |
-| `gateway_prefix` | string | `"aws-gw"` | Naming prefix for gateway identifiers |
-| `gateway_role` | string | `"hub"` | Gateway role (hub or spoke) |
-| `inside_cidr_base` | string | `"169.254.100.0/24"` | Base link-local CIDR for GRE inside addresses (must be within `169.254.0.0/16`, see constraints below) |
-| `subnet_size` | number | `28` | Prefix length for auto-generated subnets |
-| `environment` | string | `"netskope"` | Prefix for resource naming |
-| `tags` | map(string) | `{ManagedBy = "terraform"}` | Tags applied to all AWS resources |
-| `clients` | object | `{create_clients = false}` | Optional client VPC for testing |
-
-### Object Variable Details
-
-<details>
-<summary><code>aws_network_config</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `region` | string | `"us-east-1"` | AWS region |
-| `create_vpc` | bool | `true` | Create a new VPC or use existing |
-| `vpc_id` | string | `""` | Existing VPC ID (when `create_vpc = false`) |
-| `vpc_cidr` | string | `""` | VPC CIDR block (required when creating) |
-| `route_table.public` | string | `""` | Existing public route table ID |
-| `route_table.private` | string | `""` | Existing private route table ID |
-
-</details>
-
-<details>
-<summary><code>aws_transit_gw</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `create_transit_gw` | bool | `true` | Create a new TGW or use existing |
-| `tgw_id` | string | `null` | Existing TGW ID (when `create_transit_gw = false`) |
-| `tgw_asn` | string | `"64512"` | TGW BGP ASN (16-bit: 1–65534 or 32-bit: 131072–4199999999; must not conflict with `tenant_bgp_asn`; AWS reserves 7224 and 9059) |
-| `tgw_cidr` | string | `""` | TGW CIDR block for Connect Peer addressing (RFC 1918 or CG-NAT space; must not overlap with attached VPC CIDRs) |
-| `vpc_attachment` | string | `""` | Existing VPC attachment ID |
-| `phy_intfname` | string | `"enp2s1"` | Physical interface name for GRE underlay |
-
-</details>
-
-<details>
-<summary><code>netskope_tenant</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `deployment_name` | string | *required* | Free-form string used in resource naming for identification (e.g., `"my-corp-prod"`) |
-| `tenant_url` | string | `""` | Tenant URL (e.g., `https://example.infiot.net`). The scheme is stripped automatically — with or without `https://` works. |
-| `tenant_token` | string | `""` | REST API token from the Netskope SD-WAN portal |
-| `tenant_bgp_asn` | string | `"400"` | BGP ASN for gateways |
-
-</details>
-
-<details>
-<summary><code>netskope_gateway_config</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `gateway_password` | string | `"infiot"` | Console password for gateways |
-| `gateway_policy` | string | `"test"` | Netskope policy name |
-| `gateway_model` | string | `"iXVirtual"` | Gateway model |
-| `dns_primary` | string | `"8.8.8.8"` | Primary DNS server |
-| `dns_secondary` | string | `"8.8.4.4"` | Secondary DNS server |
-
-</details>
-
-<details>
-<summary><code>aws_instance</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `keypair` | string | `""` | EC2 key pair name |
-| `instance_type` | string | `"t3.medium"` | EC2 instance type |
-| `ami_name` | string | `"BWAN-SASE-RTM-CLOUD-"` | AMI name filter |
-| `ami_owner` | string | `"679593333241"` | AMI owner account ID |
-
-</details>
-
-<details>
-<summary><code>clients</code></summary>
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `create_clients` | bool | `false` | Deploy client VPC and instance |
-| `client_ami` | string | `"ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server"` | Client AMI filter |
-| `vpc_cidr` | string | `"192.168.255.0/28"` | Client VPC CIDR |
-| `instance_type` | string | `"t3.small"` | Client instance type |
-| `password` | string | `"infiot"` | Client console password |
-| `ports` | list(string) | `["22"]` | Ports for port forwarding rules |
-
-</details>
-
 ## Outputs
 
 | Output | Description |
@@ -155,16 +79,18 @@ See [docs/QUICKSTART.md](docs/QUICKSTART.md) for a step-by-step walkthrough with
 
 ## Documentation
 
+Start with the **Quick Start** to get deployed, then refer to the **Deployment Guide** for the full configuration reference.
+
 | Document | Description |
 |---|---|
-| [Architecture](docs/ARCHITECTURE.md) | Network topology, module responsibilities, resource inventory, GRE/BGP design |
-| [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Configuration walkthrough, deployment paths, scaling, tagging |
-| [Quick Start](docs/QUICKSTART.md) | Minimal steps to deploy and verify |
+| [Quick Start](docs/QUICKSTART.md) | Get deployed fast — minimal config, credentials, deploy, and verify |
+| [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Comprehensive variable reference, authentication options, deployment paths, ECMP scaling |
+| [CloudShell](docs/CLOUDSHELL.md) | CloudShell-specific environment notes (Terraform install, region, storage limits) |
+| [Architecture](docs/ARCHITECTURE.md) | Network topology, resource inventory, GRE/BGP design |
 | [IAM Permissions](docs/IAM_PERMISSIONS.md) | Required IAM policies for the Terraform operator and CI/CD |
 | [State Management](docs/STATE_MANAGEMENT.md) | Remote backend setup (S3 + DynamoDB) |
 | [Operations](docs/OPERATIONS.md) | Day-2: scaling, gateway replacement, AMI upgrades, BGP verification |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues, diagnostic commands, known limitations |
-| [CloudShell](docs/CLOUDSHELL.md) | Deploying from AWS CloudShell |
 | [DevOps Notes](docs/DEVOPS_NOTES.md) | Internal patterns, provider details, variable flow |
 
 ## License
