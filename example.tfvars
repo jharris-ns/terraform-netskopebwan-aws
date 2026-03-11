@@ -55,21 +55,36 @@ netskope_tenant = {
 }
 
 # Netskope gateway shared configuration
-# - gateway_policy: policy name assigned to all gateways
-# - create_policy: true to create a new policy, false to use an existing one (default: true)
-# - gateway_password: console login password (default: infiot)
-# - gateway_model: gateway model type (default: iXVirtual)
-# - dns_primary/dns_secondary: DNS servers for gateway interfaces
+#
+# To create a NEW policy on the tenant:
+#   netskope_gateway_config = {
+#     gateway_policy = "my-new-policy"
+#   }
+#
+# To use a policy that ALREADY EXISTS on the tenant:
+#   netskope_gateway_config = {
+#     gateway_policy = "my-existing-policy"
+#     create_policy  = false
+#   }
+#
+# All options with custom values:
+#   netskope_gateway_config = {
+#     gateway_policy   = "my-policy"
+#     create_policy    = false            # true = create new, false = use existing
+#     gateway_password = "my-password"    # console login password (default: infiot)
+#     gateway_model    = "iXVirtual"      # gateway model type
+#     dns_primary      = "8.8.8.8"        # primary DNS server
+#     dns_secondary    = "8.8.4.4"        # secondary DNS server
+#   }
 netskope_gateway_config = {
   gateway_policy = "aws-gw-ap2"
-  # create_policy = false  # Set to false to use an existing policy instead of creating one
 }
 
 # AWS EC2 instance configuration
 # - keypair: SSH key pair name for instance access
 # - instance_type: EC2 instance type (default: t3.medium)
 aws_instance = {
-  keypair = "test"
+  keypair = "REPLACE-WITH-YOUR-KEYPAIR"  # name of an existing EC2 key pair in your region (or "" for no SSH access)
 }
 
 # Common tags applied to all AWS resources via provider default_tags
