@@ -55,29 +55,23 @@ netskope_tenant = {
 }
 
 # Netskope gateway shared configuration
-#
-# To create a NEW policy on the tenant:
-#   netskope_gateway_config = {
-#     gateway_policy = "my-new-policy"
-#   }
-#
-# To use a policy that ALREADY EXISTS on the tenant:
-#   netskope_gateway_config = {
-#     gateway_policy = "my-existing-policy"
-#     create_policy  = false
-#   }
+# - gateway_policy: name of an existing policy on the Netskope tenant (must be created
+#     in the SD-WAN portal before running terraform apply)
+# - static_routes: CIDRs routed via the LAN interface on each gateway
+#     (default: ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"])
 #
 # All options with custom values:
 #   netskope_gateway_config = {
-#     gateway_policy   = "my-policy"
-#     create_policy    = false            # true = create new, false = use existing
+#     gateway_policy   = "my-policy"      # must already exist on the tenant
 #     gateway_password = "my-password"    # console login password (default: infiot)
 #     gateway_model    = "iXVirtual"      # gateway model type
 #     dns_primary      = "8.8.8.8"        # primary DNS server
 #     dns_secondary    = "8.8.4.4"        # secondary DNS server
+#     static_routes    = ["10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
 #   }
 netskope_gateway_config = {
   gateway_policy = "aws-gw-ap2"
+  # static_routes  = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
 }
 
 # AWS EC2 instance configuration

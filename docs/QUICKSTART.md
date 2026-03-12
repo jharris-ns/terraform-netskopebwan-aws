@@ -4,7 +4,9 @@ Minimal steps to deploy Netskope SD-WAN gateways in AWS.
 
 ## Prerequisites
 
-Terraform >= 1.3, AWS CLI configured, and a Netskope SD-WAN tenant with an API token.
+- Terraform >= 1.3, AWS CLI configured
+- Netskope SD-WAN tenant with a REST API token
+- **Netskope gateway policy** — create a policy in the SD-WAN portal before deploying (the policy name is referenced in `terraform.tfvars`)
 
 ## 1. Clone and Configure
 
@@ -35,7 +37,7 @@ netskope_tenant = {
 }
 
 netskope_gateway_config = {
-  gateway_policy = "my-aws-policy"
+  gateway_policy = "my-aws-policy"  # must already exist on the tenant
 }
 
 aws_instance = {

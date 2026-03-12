@@ -144,10 +144,10 @@ variable "netskope_gateway_config" {
   type = object({
     gateway_password = optional(string, "infiot")
     gateway_policy   = optional(string, "test")
-    create_policy    = optional(bool, true)
     gateway_model    = optional(string, "iXVirtual")
     dns_primary      = optional(string, "8.8.8.8")
     dns_secondary    = optional(string, "8.8.4.4")
+    static_routes    = optional(list(string), ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"])
   })
   default = {}
 }

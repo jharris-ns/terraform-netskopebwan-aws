@@ -7,6 +7,7 @@ Comprehensive configuration reference and deployment instructions for Netskope S
 - **Terraform** >= 1.3
 - **AWS CLI** configured with sufficient permissions (see [IAM Permissions](IAM_PERMISSIONS.md))
 - **Netskope SD-WAN tenant** with a REST API token (created in the SD-WAN portal)
+- **Netskope gateway policy** — create a policy in the SD-WAN portal before deploying. The policy name is set in `gateway_policy` and must already exist; Terraform will fail at plan time if it cannot find it.
 - **AWS EC2 key pair** in the target region (optional, for SSH access)
 
 ## Authentication
@@ -76,12 +77,12 @@ cp example.tfvars terraform.tfvars
 
 | Field | Required | Default | Description |
 |---|---|---|---|
-| `gateway_policy` | Yes | `"test"` | Netskope policy name assigned to all gateways |
-| `create_policy` | No | `true` | `true` to create a new policy, `false` to look up an existing one by name. A new policy is created in the Netskope SD-WAN portal with the name from `gateway_policy` and default settings — all gateways in the deployment share this single policy. Use `false` when you have a pre-configured policy with custom routing or security rules. |
+| `gateway_policy` | Yes | `"test"` | Name of an existing policy on the Netskope tenant. The policy must be created in the SD-WAN portal before deployment — all gateways in the deployment share this single policy. |
 | `gateway_password` | No | `"infiot"` | Console login password |
 | `gateway_model` | No | `"iXVirtual"` | Gateway model type |
 | `dns_primary` | No | — | Primary DNS server for gateway interfaces |
 | `dns_secondary` | No | — | Secondary DNS server for gateway interfaces |
+| `static_routes` | No | `["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]` | List of CIDR blocks to route via the LAN interface on each gateway. A static route is created per CIDR per gateway. |
 
 ### `aws_instance`
 
@@ -238,6 +239,6 @@ To tear down the entire deployment:
 terraform destroy -var-file=terraform.tfvars
 ```
 
-This removes all AWS resources and Netskope portal configuration created by the project. The Netskope gateway entries are deactivated and deleted via the provider.
+This removes all AWS resources and Netskope gateway configuration created by the project. The Netskope gateway entries are deactivated and deleted via the provider. The gateway policy is not deleted — it was created outside of Terraform and remains on the tenant.
 
 **Caution**: If other resources (e.g., additional TGW attachments, route table entries) were manually added to the VPC or Transit Gateway outside of Terraform, remove them before running `terraform destroy` to avoid dependency errors.

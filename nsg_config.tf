@@ -67,20 +67,16 @@ locals {
 }
 
 # --- Policy (shared across all gateways) ---
-
-resource "netskopebwan_policy" "multicloud" {
-  count = var.netskope_gateway_config.create_policy ? 1 : 0
-  name  = var.netskope_gateway_config.gateway_policy
-}
+# The policy must already exist on the Netskope tenant.
+# Terraform looks it up by name during plan — fails fast if not found.
 
 data "netskopebwan_policy" "existing" {
-  count = var.netskope_gateway_config.create_policy ? 0 : 1
-  name  = var.netskope_gateway_config.gateway_policy
+  name = var.netskope_gateway_config.gateway_policy
 }
 
 locals {
-  policy_id   = var.netskope_gateway_config.create_policy ? netskopebwan_policy.multicloud[0].id : data.netskopebwan_policy.existing[0].id
-  policy_name = var.netskope_gateway_config.create_policy ? netskopebwan_policy.multicloud[0].name : data.netskopebwan_policy.existing[0].name
+  policy_id   = data.netskopebwan_policy.existing.id
+  policy_name = data.netskopebwan_policy.existing.name
 }
 
 # --- Gateway Resources (one per gateway) ---
@@ -147,6 +143,31 @@ resource "netskopebwan_gateway_staticroute" "metadata" {
   device      = "GE1"
   install     = true
   nhop        = cidrhost(local.gateways[each.key].subnets[each.value].subnet_cidr, 1)
+}
+
+# --- Static Routes (AWS CIDRs via LAN interface) ---
+
+locals {
+  nsg_gw_static_routes = merge([
+    for gw_key, lan_key in local.nsg_gw_lan_key : {
+      for cidr in var.netskope_gateway_config.static_routes :
+      "${gw_key}-${replace(cidr, "/", "_")}" => {
+        gw_key      = gw_key
+        lan_key     = lan_key
+        destination = cidr
+      }
+    }
+  ]...)
+}
+
+resource "netskopebwan_gateway_staticroute" "aws_cidrs" {
+  for_each    = local.nsg_gw_static_routes
+  gateway_id  = time_sleep.gw_propagation[each.value.gw_key].triggers["gateway_id"]
+  advertise   = false
+  destination = each.value.destination
+  device      = upper(each.value.lan_key)
+  install     = true
+  nhop        = cidrhost(local.gateways[each.value.gw_key].subnets[each.value.lan_key].subnet_cidr, 1)
 }
 
 # --- Gateway Activation ---

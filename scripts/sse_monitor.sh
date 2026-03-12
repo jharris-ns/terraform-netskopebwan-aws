@@ -57,7 +57,7 @@ do
   # --------------------------------
 
   # Get tunnel count safely
-  sse_tunnel_count=$(docker exec $CONTAINER_NAME ikectl show sa 2>/dev/null | grep "^iked_sas:.*ESTABLISHED" | wc -l)
+  sse_tunnel_count=$(docker exec $CONTAINER_NAME ikectl show sa 2>/dev/null | grep ESTABLISHED | grep "IPV4/163" | wc -l)
 
   # Safety check: if variable is empty, treat as 0
   if [ -z "$sse_tunnel_count" ]; then sse_tunnel_count=0; fi

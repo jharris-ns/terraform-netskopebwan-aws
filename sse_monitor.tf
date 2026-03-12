@@ -56,6 +56,7 @@ resource "null_resource" "sse_monitor" {
     bgp_asn     = var.netskope_tenant.tenant_bgp_asn
     bgp_peer1   = each.value.bgp_peers.peer1
     bgp_peer2   = each.value.bgp_peers.peer2
+    script_hash = filesha256("${path.module}/scripts/sse_monitor.sh")
   }
 
   provisioner "local-exec" {
