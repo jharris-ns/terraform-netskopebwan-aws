@@ -71,7 +71,7 @@ netskope_tenant = {
 #   }
 netskope_gateway_config = {
   gateway_policy = "aws-gw-ap2"
-  # static_routes  = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
+  static_routes  = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
 }
 
 # AWS EC2 instance configuration
