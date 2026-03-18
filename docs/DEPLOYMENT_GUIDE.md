@@ -82,7 +82,9 @@ cp example.tfvars terraform.tfvars
 | `gateway_model` | No | `"iXVirtual"` | Gateway model type |
 | `dns_primary` | No | — | Primary DNS server for gateway interfaces |
 | `dns_secondary` | No | — | Secondary DNS server for gateway interfaces |
-| `static_routes` | No | `["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]` | List of CIDR blocks to route via the LAN interface on each gateway. A static route is created per CIDR per gateway. |
+| `static_routes` | No | `[]` | List of CIDR blocks to route via the LAN interface on each gateway. Must include the TGW CIDR (required for GRE/BGP connectivity) and any VPC or on-prem CIDRs reachable via the TGW. If the TGW CIDR is in a different address range from the VPC CIDRs (e.g. TGW on `100.64.x.x`, VPCs on `10.x.x.x`), both ranges must be listed. Routes are installed in both the main and policy routing tables. |
+| `wan_mtu` | No | `1500` | MTU for WAN/overlay interfaces. Only applied to overlay interfaces (GE1); LAN interfaces are unaffected. |
+| `gre_mtu` | No | `1300` | MTU for the GRE tunnel interface (`gre1`) between the gateway and the TGW Connect peer. |
 
 ### `aws_instance`
 
@@ -129,9 +131,9 @@ These merge with per-resource `Name` tags set individually using the environment
 
 ## Deployment Paths
 
-### New VPC + New Transit Gateway
+### Option 1: New Transit Gateway
 
-Use when deploying into a fresh AWS environment:
+Use when deploying into a fresh AWS environment. Terraform creates both the VPC and TGW:
 
 ```hcl
 aws_network_config = {
@@ -147,9 +149,75 @@ aws_transit_gw = {
 }
 ```
 
-### Existing VPC + Existing Transit Gateway
+When Terraform creates the TGW, it enables `default_route_table_association` and `default_route_table_propagation`, so all attachments (gateway VPC, Connect, and client VPC) are automatically associated and propagated on the default TGW route table.
 
-Use when integrating into an established network:
+### Option 2: Existing Transit Gateway (same account)
+
+Use when attaching gateways to a TGW that already exists in the same AWS account:
+
+```hcl
+aws_network_config = {
+  create_vpc = true
+  region     = "us-east-1"
+  vpc_cidr   = "172.32.0.0/16"
+}
+
+aws_transit_gw = {
+  create_transit_gw = false
+  tgw_id            = "tgw-0abc123def456"
+  tgw_asn           = "64513"         # must match the existing TGW's ASN
+  tgw_cidr          = "192.0.1.0/24"  # must not overlap with existing TGW CIDRs
+}
+```
+
+**Important:** `tgw_asn` must match the ASN configured on the existing TGW. A mismatch will cause BGP session failures. Check the TGW ASN in the AWS console or with:
+
+```sh
+aws ec2 describe-transit-gateways --transit-gateway-ids tgw-0abc123def456 \
+  --query 'TransitGateways[0].Options.AmazonSideAsn'
+```
+
+You are responsible for ensuring the TGW route table has the correct associations and propagations for the gateway VPC attachment and Connect attachments. Without these, BGP routes from the gateways will not appear in the TGW route table and traffic will not be forwarded.
+
+### Option 3: Shared Transit Gateway (cross-account via RAM)
+
+Use when the TGW is owned by another account and shared to this account via [AWS Resource Access Manager (RAM)](https://docs.aws.amazon.com/ram/latest/userguide/what-is.html):
+
+```hcl
+aws_network_config = {
+  create_vpc = true
+  region     = "us-east-1"
+  vpc_cidr   = "172.32.0.0/16"
+}
+
+aws_transit_gw = {
+  create_transit_gw = false
+  tgw_id            = "tgw-0abc123def456"  # TGW ID from the sharing account
+  tgw_asn           = "64513"              # must match the shared TGW's ASN
+  tgw_cidr          = "192.0.1.0/24"      # must not overlap with existing TGW CIDRs
+}
+```
+
+**Prerequisites for RAM-shared TGW:**
+
+1. The TGW owner must share the TGW via RAM with your account (or organization)
+2. You must accept the RAM resource share in your account (unless auto-accept is enabled for the organization)
+3. The TGW must have `auto_accept_shared_attachments` enabled, or the owner must manually accept the VPC attachment after deployment
+4. The TGW owner is responsible for route table associations and propagations — coordinate with them to ensure the Connect attachments are associated and BGP routes are propagated
+
+**Verify the shared TGW is visible in your account:**
+
+```sh
+aws ec2 describe-transit-gateways --transit-gateway-ids tgw-0abc123def456
+```
+
+If this returns an error, the RAM share has not been accepted or the TGW ID is incorrect.
+
+**Note on route tables:** In a RAM-shared TGW, only the owner account can modify the TGW route tables. The gateway account creates the VPC and Connect attachments, but the owner must ensure they are associated and propagated on the correct route table.
+
+### Using an Existing VPC
+
+Any of the options above can be combined with an existing VPC instead of creating a new one:
 
 ```hcl
 aws_network_config = {
@@ -157,14 +225,9 @@ aws_network_config = {
   vpc_id     = "vpc-0abc123def456"
   region     = "ap-southeast-2"
 }
-
-aws_transit_gw = {
-  create_transit_gw = false
-  tgw_id            = "tgw-0abc123def456"
-}
 ```
 
-**Note**: When reusing an existing VPC attachment, you may need to manually add the new gateway LAN subnets to it — the AWS API does not support in-place subnet updates via Terraform. Add them with the CLI or Console:
+When reusing an existing VPC attachment, you may need to manually add the new gateway LAN subnets to it — the AWS API does not support in-place subnet updates via Terraform. Add them with the CLI or Console:
 
 ```sh
 aws ec2 modify-transit-gateway-vpc-attachment \
@@ -173,8 +236,6 @@ aws ec2 modify-transit-gateway-vpc-attachment \
 ```
 
 The subnet IDs are the ge2 (LAN) subnets Terraform created, one per AZ — find them in `terraform output` or `terraform state list`.
-
-**Note**: When the project creates a new TGW, it enables `default_route_table_association` and `default_route_table_propagation`, so all attachments (gateway VPC, Connect, and client VPC) are automatically associated and propagated on the default TGW route table. When using an existing TGW, you are responsible for ensuring the TGW route table has the correct associations and propagations for the gateway VPC attachment and Connect attachments. Without these, BGP routes from the gateways will not appear in the TGW route table and traffic will not be forwarded.
 
 ## Step-by-Step Deployment
 

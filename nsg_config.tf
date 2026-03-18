@@ -35,17 +35,6 @@ locals {
     if try(v.subnet.overlay, null) == "private"
   }
 
-  # LAN (non-overlay) interfaces per gateway
-  nsg_gw_lan_key = {
-    for gw_key, gw in local.gateways : gw_key => [
-      for intf_key, intf in gw.subnets : intf_key
-      if intf != null && intf.overlay == null
-      ][0] if length([
-        for intf_key, intf in gw.subnets : intf_key
-        if intf != null && intf.overlay == null
-    ]) > 0
-  }
-
   # First public overlay interface per gateway (for metadata static route)
   nsg_gw_public_key = {
     for gw_key, gw in local.gateways : gw_key => [
@@ -114,7 +103,13 @@ resource "netskopebwan_gateway_interface" "gw_interfaces" {
     address_family     = "ipv4"
     dns_primary        = var.netskope_gateway_config.dns_primary
     dns_secondary      = var.netskope_gateway_config.dns_secondary
-    gateway            = cidrhost(local.gateways[each.value.gw_key].subnets[each.value.intf_key].subnet_cidr, 1)
+    # Set default gateway only on overlay interfaces (GE1). LAN interfaces (GE2)
+    # must not have a default gateway — traffic is routed via explicit static routes only.
+    # The expression merges the public and private overlay interface maps, then checks
+    # if the current interface key exists in that combined map. If it does (overlay),
+    # the gateway is set to the first usable IP in the subnet (AWS subnet gateway).
+    # If not (LAN), gateway is null and omitted from the API call.
+    gateway            = contains(keys(merge(local.nsg_public_interfaces, local.nsg_private_interfaces)), each.key) ? cidrhost(local.gateways[each.value.gw_key].subnets[each.value.intf_key].subnet_cidr, 1) : null
     mask               = cidrnetmask(local.gateways[each.value.gw_key].subnets[each.value.intf_key].subnet_cidr)
   }
   dynamic "overlay_setting" {
@@ -127,6 +122,7 @@ resource "netskopebwan_gateway_interface" "gw_interfaces" {
       tag                 = contains(keys(local.nsg_public_interfaces), each.key) ? "wired" : "private"
     }
   }
+  mtu         = contains(keys(merge(local.nsg_public_interfaces, local.nsg_private_interfaces)), each.key) ? var.netskope_gateway_config.wan_mtu : null
   enable_nat  = contains(keys(local.nsg_public_interfaces), each.key)
   mode        = "routed"
   is_disabled = false
@@ -143,31 +139,6 @@ resource "netskopebwan_gateway_staticroute" "metadata" {
   device      = "GE1"
   install     = true
   nhop        = cidrhost(local.gateways[each.key].subnets[each.value].subnet_cidr, 1)
-}
-
-# --- Static Routes (AWS CIDRs via LAN interface) ---
-
-locals {
-  nsg_gw_static_routes = merge([
-    for gw_key, lan_key in local.nsg_gw_lan_key : {
-      for cidr in var.netskope_gateway_config.static_routes :
-      "${gw_key}-${replace(cidr, "/", "_")}" => {
-        gw_key      = gw_key
-        lan_key     = lan_key
-        destination = cidr
-      }
-    }
-  ]...)
-}
-
-resource "netskopebwan_gateway_staticroute" "aws_cidrs" {
-  for_each    = local.nsg_gw_static_routes
-  gateway_id  = time_sleep.gw_propagation[each.value.gw_key].triggers["gateway_id"]
-  advertise   = false
-  destination = each.value.destination
-  device      = upper(each.value.lan_key)
-  install     = true
-  nhop        = cidrhost(local.gateways[each.value.gw_key].subnets[each.value.lan_key].subnet_cidr, 1)
 }
 
 # --- Gateway Activation ---

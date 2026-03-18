@@ -57,8 +57,11 @@ netskope_tenant = {
 # Netskope gateway shared configuration
 # - gateway_policy: name of an existing policy on the Netskope tenant (must be created
 #     in the SD-WAN portal before running terraform apply)
-# - static_routes: CIDRs routed via the LAN interface on each gateway
-#     (default: ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"])
+# - static_routes: CIDRs routed via the LAN interface on each gateway (default: [])
+#     Must include the TGW CIDR (for GRE/BGP) and any VPC/on-prem CIDRs reachable via the TGW.
+#     If the TGW CIDR is in a different range from VPC CIDRs, both must be listed.
+# - wan_mtu: MTU for the Netskope overlay/WAN interface (default: 1500)
+# - gre_mtu: MTU for the GRE tunnel interface to the TGW (default: 1300)
 #
 # All options with custom values:
 #   netskope_gateway_config = {
@@ -67,11 +70,16 @@ netskope_tenant = {
 #     gateway_model    = "iXVirtual"      # gateway model type
 #     dns_primary      = "8.8.8.8"        # primary DNS server
 #     dns_secondary    = "8.8.4.4"        # secondary DNS server
-#     static_routes    = ["10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
+#     static_routes    = ["192.0.1.0/24", "10.0.0.0/8"]   # TGW CIDR + VPC/on-prem CIDRs via LAN
+#     wan_mtu          = 1500             # Netskope overlay/WAN interface MTU
+#     gre_mtu          = 1300             # GRE tunnel interface MTU
 #   }
 netskope_gateway_config = {
   gateway_policy = "aws-gw-ap2"
-  static_routes  = ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]  # AWS CIDRs to route via LAN
+  gateway_password = "infiot"
+  static_routes  = ["192.0.1.0/24", "10.0.0.0/8", "172.16.0.0/12"]  # TGW CIDR + VPC/on-prem CIDRs via LAN
+  # wan_mtu        = 1500  # Netskope overlay/WAN interface MTU (default: 1500)
+  # gre_mtu        = 1300  # GRE tunnel interface MTU (default: 1300)
 }
 
 # AWS EC2 instance configuration

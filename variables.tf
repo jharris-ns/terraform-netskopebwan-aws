@@ -147,7 +147,13 @@ variable "netskope_gateway_config" {
     gateway_model    = optional(string, "iXVirtual")
     dns_primary      = optional(string, "8.8.8.8")
     dns_secondary    = optional(string, "8.8.4.4")
-    static_routes    = optional(list(string), ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"])
+    # CIDRs to route via the LAN interface. Must include the TGW CIDR (for GRE/BGP connectivity)
+    # and any VPC or on-prem CIDRs reachable via the TGW. If the TGW CIDR is in a different
+    # address range from the VPC CIDRs (e.g. TGW on 100.64.x.x, VPCs on 10.x.x.x), both
+    # ranges must be listed. Routes are installed in both the main and policy routing tables.
+    static_routes    = optional(list(string), [])
+    wan_mtu          = optional(number, 1500)  # Netskope overlay/WAN interface MTU
+    gre_mtu          = optional(number, 1300)  # GRE tunnel interface MTU
   })
   default = {}
 }

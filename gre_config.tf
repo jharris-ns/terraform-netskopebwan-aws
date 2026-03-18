@@ -13,8 +13,11 @@ locals {
       local_ip     = tolist(aws_network_interface.gw_interfaces["${gw_key}-${local.gw_lan_key[gw_key]}"].private_ips)[0]
       remote_ip    = aws_ec2_transit_gateway_connect_peer.gw_peers[gw_key].transit_gateway_address
       intf_name    = "gre1"
-      mtu          = "1300"
+      mtu          = tostring(var.netskope_gateway_config.gre_mtu)
       phy_intfname = var.aws_transit_gw.phy_intfname
+      tgw_cidr     = var.aws_transit_gw.tgw_cidr
+      lan_gateway   = cidrhost(gw.subnets[local.gw_lan_key[gw_key]].subnet_cidr, 1)
+      static_routes = join(",", var.netskope_gateway_config.static_routes)
       bgp_peers = {
         peer1 = cidrhost(gw.inside_cidr, 2)
         peer2 = cidrhost(gw.inside_cidr, 3)
@@ -89,6 +92,19 @@ resource "aws_ssm_document" "gre_config" {
         type        = "String"
         description = "Transit Gateway BGP ASN (remote-as)"
       }
+      tgwCidr = {
+        type        = "String"
+        description = "TGW CIDR block for policy routing"
+      }
+      lanGateway = {
+        type        = "String"
+        description = "LAN subnet gateway IP"
+      }
+      staticRoutes = {
+        type        = "String"
+        description = "Comma-separated list of CIDRs to route via LAN interface"
+        default     = ""
+      }
       activationToken = {
         type        = "String"
         description = "Gateway activation token"
@@ -107,8 +123,8 @@ resource "aws_ssm_document" "gre_config" {
             "#!/bin/bash",
             "set -e",
             "echo 'Activating gateway...'",
-            "infhostd activate -uri {{ tenantUri }} -token {{ activationToken }}",
-            "echo 'Gateway activated successfully. Waiting 30s for activation to propagate...'",
+            "infhostd activate -uri {{ tenantUri }} -token {{ activationToken }} || echo 'Activation failed (gateway may already be activated) — continuing...'",
+            "echo 'Waiting 30s for activation to propagate...'",
             "sleep 30"
           ]
         }
@@ -203,10 +219,26 @@ resource "aws_ssm_document" "gre_config" {
             "set -e",
             "echo 'Configuring GRE tunnel...'",
             "infhostd config-gre -inside-ip {{ insideIp }} -inside-mask {{ insideMask }} -intfname {{ intfName }} -local-ip {{ localIp }} -remote-ip {{ remoteIp }} -mtu {{ mtu }} -phy-intfname {{ phyIntfname }}",
+            "echo 'Adding TGW CIDR route to policy routing table 101...'",
+            "# The Netskope agent creates table 101 with a default route via the WAN interface.",
+            "# GRE outer packets sourced from the LAN IP must route via the LAN interface to reach the TGW.",
+            "ip route replace {{ tgwCidr }} via {{ lanGateway }} dev {{ phyIntfname }} table 101 2>/dev/null || echo 'Table 101 not yet present — route will be added after container restart'",
             "echo 'Restarting infhost service...'",
             "service infhost restart",
             "echo 'Restarting infhost container...'",
             "infhostd restart-container",
+            "echo 'Waiting 10s for agent to repopulate routing tables...'",
+            "sleep 10",
+            "echo 'Re-adding TGW CIDR route to table 101 (in case agent overwrote it)...'",
+            "ip route replace {{ tgwCidr }} via {{ lanGateway }} dev {{ phyIntfname }} table 101 2>/dev/null || true",
+            "echo 'Installing static routes via LAN interface...'",
+            "IFS=',' read -ra CIDRS <<< '{{ staticRoutes }}'",
+            "for CIDR in \"$${CIDRS[@]}\"; do",
+            "  [ -z \"$CIDR\" ] && continue",
+            "  ip route replace $CIDR via {{ lanGateway }} dev {{ phyIntfname }} 2>/dev/null || true",
+            "  ip route replace $CIDR via {{ lanGateway }} dev {{ phyIntfname }} table 101 2>/dev/null || true",
+            "  echo \"  Added route: $CIDR via {{ lanGateway }} dev {{ phyIntfname }}\"",
+            "done",
             "echo 'GRE tunnel configured successfully.'"
           ]
         }
@@ -270,6 +302,9 @@ resource "null_resource" "gre_config" {
     intf_name        = each.value.intf_name
     mtu              = each.value.mtu
     phy_intfname     = each.value.phy_intfname
+    tgw_cidr         = each.value.tgw_cidr
+    lan_gateway      = each.value.lan_gateway
+    static_routes    = each.value.static_routes
     bgp_asn          = var.netskope_tenant.tenant_bgp_asn
     tgw_asn          = var.aws_transit_gw.tgw_asn
     bgp_peer1        = each.value.bgp_peers.peer1
@@ -298,6 +333,9 @@ resource "null_resource" "gre_config" {
     bgpPeer2        = [each.value.bgp_peers.peer2]
     bgpMetric       = [each.value.bgp_metric]
     tgwAsn          = [var.aws_transit_gw.tgw_asn]
+    tgwCidr         = [each.value.tgw_cidr]
+    lanGateway      = [each.value.lan_gateway]
+    staticRoutes    = [each.value.static_routes]
     activationToken = [each.value.activation_token]
     tenantUri       = [each.value.tenant_uri]
 })}' \

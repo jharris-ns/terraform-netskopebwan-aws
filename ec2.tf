@@ -28,6 +28,12 @@ resource "aws_instance" "gateways" {
   iam_instance_profile = aws_iam_instance_profile.gateway_ssm_profile.name
   key_name             = var.aws_instance.keypair
 
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
+
   user_data = templatefile("${path.module}/scripts/user-data.sh", {
     netskope_gw_default_password = var.netskope_gateway_config.gateway_password
     netskope_tenant_url          = local.tenant_url
