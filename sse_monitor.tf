@@ -79,6 +79,23 @@ resource "null_resource" "sse_monitor" {
       cp "${path.module}/scripts/sse_monitor.logrotate" "$TMPDIR/etc/logrotate.d/sse_monitor"
 
       # Generate FRR config files with per-gateway BGP peers
+      # Block redistributed 0.0.0.0/0 from leaking via set-med-peer route-map.
+      # default-originate is independent of outbound route-map filtering, so
+      # this deny rule does not affect the controlled default route advertisement.
+      cat > "$TMPDIR/root/sse_monitor/frrcmds-block-default-redistribute.json" <<BLKEOF
+{
+  "frrCmdSets": [
+    {
+      "frrCmds": [
+        "conf t",
+        "route-map set-med-peer deny 5",
+        "match ip address prefix-list default"
+      ]
+    }
+  ]
+}
+BLKEOF
+
       cat > "$TMPDIR/root/sse_monitor/frrcmds-advertise-default.json" <<ADVEOF
 {
   "frrCmdSets": [

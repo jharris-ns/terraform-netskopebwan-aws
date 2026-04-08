@@ -6,6 +6,7 @@ LOG_FILE="/var/log/sse_monitor.log"
 STABILIZATION_TIME=30  # Seconds to wait after restart for FRR to stabilize
 ADVERTISE_FILE=/root/sse_monitor/frrcmds-advertise-default.json
 RETRACT_FILE=/root/sse_monitor/frrcmds-retract-default.json
+BLOCK_REDIST_FILE=/root/sse_monitor/frrcmds-block-default-redistribute.json
 
 # Initialize tracking variables
 last_start_time=""
@@ -41,6 +42,18 @@ do
 
     # This sleep is CRITICAL. It lets FRR finish loading its default config.
     sleep $STABILIZATION_TIME
+
+    # Block redistributed 0.0.0.0/0 from leaking to TGW peers via set-med-peer.
+    # default-originate is independent of outbound route-map deny rules.
+    if [ -f "$BLOCK_REDIST_FILE" ]; then
+      echo "$(date) Applying route-map deny for redistributed default route..." >> $LOG_FILE
+      docker cp $BLOCK_REDIST_FILE $CONTAINER_NAME:/tmp/frrcmds-block-default-redistribute.json
+      if docker exec $CONTAINER_NAME /opt/infiot/bin/gencfg -run-frr-cmds /tmp/frrcmds-block-default-redistribute.json >> $LOG_FILE 2>&1; then
+        echo "$(date) SUCCESS: Redistributed default route blocked in set-med-peer." >> $LOG_FILE
+      else
+        echo "$(date) ERROR: Failed to apply redistribute block rule." >> $LOG_FILE
+      fi
+    fi
 
     # Start in retracted state so the monitor always pushes the advertise config
     # when tunnels are up. This handles both fresh boots and container restarts.
