@@ -28,7 +28,7 @@ resource "aws_ssm_document" "sse_monitor" {
           runCommand = [
             "#!/bin/bash",
             "set -e",
-            "echo '{{ scriptPayload }}' | base64 -d | tar xz -C /",
+            "echo '{{ scriptPayload }}' | base64 -d | tar xz --no-overwrite-dir -C /",
             "chmod 755 /root/sse_monitor/sse_monitor.sh",
             "systemctl daemon-reload",
             "systemctl enable sse_monitor",

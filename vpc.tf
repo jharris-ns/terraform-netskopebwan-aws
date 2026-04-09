@@ -185,29 +185,6 @@ resource "aws_security_group" "public" {
   name   = join("-", ["Public-SG", var.netskope_tenant.deployment_name])
   vpc_id = local.vpc_id
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "IPSec"
-    from_port   = 4500
-    to_port     = 4500
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = join("-", ["Public-SG", var.netskope_tenant.deployment_name])
   }
@@ -254,21 +231,6 @@ resource "aws_security_group" "private" {
   name        = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
   description = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
   vpc_id      = local.vpc_id
-
-  ingress {
-    description = "All"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   tags = {
     Name = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
@@ -379,21 +341,6 @@ resource "aws_security_group" "ssm_endpoint" {
   name        = join("-", ["SSM-Endpoint-SG", var.netskope_tenant.deployment_name])
   description = "Allow HTTPS for SSM VPC endpoints"
   vpc_id      = local.vpc_id
-
-  ingress {
-    description = "HTTPS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.aws_network_config.vpc_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   tags = {
     Name = join("-", ["SSM-Endpoint-SG", var.netskope_tenant.deployment_name])
