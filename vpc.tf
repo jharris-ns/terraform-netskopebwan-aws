@@ -185,29 +185,6 @@ resource "aws_security_group" "public" {
   name   = join("-", ["Public-SG", var.netskope_tenant.deployment_name])
   vpc_id = local.vpc_id
 
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "IPSec"
-    from_port   = 4500
-    to_port     = 4500
-    protocol    = "udp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = join("-", ["Public-SG", var.netskope_tenant.deployment_name])
   }
@@ -217,35 +194,43 @@ resource "aws_security_group" "public" {
   }
 }
 
-resource "aws_security_group_rule" "clients" {
+resource "aws_vpc_security_group_ingress_rule" "public_ssh" {
+  security_group_id = aws_security_group.public.id
+  description       = "SSH"
+  from_port         = 22
+  to_port           = 22
+  ip_protocol       = "tcp"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "public_ipsec" {
+  security_group_id = aws_security_group.public.id
+  description       = "IPSec"
+  from_port         = 4500
+  to_port           = 4500
+  ip_protocol       = "udp"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "public_all" {
+  security_group_id = aws_security_group.public.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "clients" {
   for_each          = var.clients.create_clients ? toset(var.clients.ports) : toset([])
-  type              = "ingress"
+  security_group_id = aws_security_group.public.id
   from_port         = sum([2000, tonumber(each.key)])
   to_port           = sum([2000, tonumber(each.key)])
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.public.id
+  ip_protocol       = "tcp"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 resource "aws_security_group" "private" {
   name        = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
   description = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
   vpc_id      = local.vpc_id
-
-  ingress {
-    description = "All"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
 
   tags = {
     Name = join("-", ["Private-SG", var.netskope_tenant.deployment_name])
@@ -254,6 +239,19 @@ resource "aws_security_group" "private" {
   lifecycle {
     create_before_destroy = true
   }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "private_all" {
+  security_group_id = aws_security_group.private.id
+  description       = "All"
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "private_all" {
+  security_group_id = aws_security_group.private.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 # --- Transit Gateway ---
@@ -344,21 +342,6 @@ resource "aws_security_group" "ssm_endpoint" {
   description = "Allow HTTPS for SSM VPC endpoints"
   vpc_id      = local.vpc_id
 
-  ingress {
-    description = "HTTPS from VPC"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [var.aws_network_config.vpc_cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = join("-", ["SSM-Endpoint-SG", var.netskope_tenant.deployment_name])
   }
@@ -366,6 +349,21 @@ resource "aws_security_group" "ssm_endpoint" {
   lifecycle {
     create_before_destroy = true
   }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ssm_endpoint_https" {
+  security_group_id = aws_security_group.ssm_endpoint.id
+  description       = "HTTPS from VPC"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  cidr_ipv4         = var.aws_network_config.vpc_cidr
+}
+
+resource "aws_vpc_security_group_egress_rule" "ssm_endpoint_all" {
+  security_group_id = aws_security_group.ssm_endpoint.id
+  ip_protocol       = "-1"
+  cidr_ipv4         = "0.0.0.0/0"
 }
 
 # Pick one public subnet per unique AZ for SSM endpoints
