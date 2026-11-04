@@ -10,7 +10,6 @@ This tells tar to skip setting ownership and permissions on directories that alr
 Elastic IPs were allocated inline on the `aws_eip` resource with a direct `network_interface` binding. This tied the EIP lifecycle to the ENI, meaning that if a gateway was destroyed and recreated, the EIP could be released and a new one allocated — breaking any external whitelisting that depends on stable public IPs.
 
 ### Fix
-
 Separated EIP allocation from ENI association in `interfaces.tf`:
 
 - **`aws_eip.gw_eips`** — now allocates EIPs without any `network_interface` binding. Added `lifecycle { prevent_destroy = true }` to guard against accidental release during `terraform destroy`. Replaced deprecated `vpc = true` attribute (kept for AWS provider v4.x compatibility).

@@ -1,4 +1,4 @@
-# Netskope SD-WAN Gateway — AWS Terraform Project
+!# Netskope SD-WAN Gateway — AWS Terraform Project
 
 Deploys and activates Netskope SD-WAN (BWAN) gateways in AWS with automated GRE tunnel and BGP peering through an AWS Transit Gateway. This project handles the full lifecycle: VPC networking, Netskope portal configuration, EC2 instance provisioning, and post-launch GRE/BGP setup via SSM.
 
@@ -27,6 +27,32 @@ Any AWS workload that routes outbound traffic via a default route (0.0.0.0/0) th
 - **Centralized security** for entire VPCs without per-instance management
 - **Private IP visibility** preserved for logging and policy enforcement
 - **Automatic failover** via BGP — no manual intervention when a gateway fails
+
+## What's New in v2.1
+
+### Security: Credentials removed from EC2 user-data
+
+Gateway passwords and per-gateway activation tokens are no longer passed as cleartext in EC2 user-data. This resolves a vulnerability class flagged by cloud security scanners (e.g. CrowdStrike Cloud Risk: *"Publicly exposed compute contains cleartext credentials in user-data"*).
+
+**How it works now:**
+- At deploy time, `gateway_password` and each gateway's `activation_key` are written to AWS SSM Parameter Store as `SecureString` parameters (KMS-encrypted with the `aws/ssm` managed key).
+- The IAM role attached to gateway instances is granted least-privilege `ssm:GetParameter` + `kms:Decrypt` access scoped to those specific parameters.
+- At boot, the `user-data.sh` script fetches credentials from SSM at runtime, sets the console password via `chpasswd`, and calls `infhostd activate` directly — no credentials ever appear in the user-data payload visible via IMDS or the EC2 API.
+- The same pattern applies to the optional test client instance (`client-user-data.sh`).
+
+**Files changed:** `ssm.tf` (new), `iam.tf`, `ec2.tf`, `clients.tf`, `scripts/user-data.sh`, `scripts/client-user-data.sh`
+
+### AMI: Static per-region map replaces Marketplace data source
+
+The `data "aws_ami"` lookup (which required an active AWS Marketplace subscription) has been replaced with a hardcoded per-region AMI map for `BWAN-SASE-R6.3.371`. This removes the subscription prerequisite and makes deployments faster and more predictable.
+
+- All 33 supported AWS regions are covered.
+- To pin a specific AMI, set `ami_id` in the `aws_instance` variable block in `terraform.tfvars`.
+- The `ami_name` and `ami_owner` variable fields have been removed.
+
+**Files changed:** `ec2.tf`, `variables.tf`
+
+---
 
 ## What This Project Does
 

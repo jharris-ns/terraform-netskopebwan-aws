@@ -104,8 +104,7 @@ variable "aws_instance" {
   type = object({
     keypair       = optional(string, "")
     instance_type = optional(string, "t3.medium")
-    ami_name      = optional(string, "BWAN-SASE-RTM-CLOUD-")
-    ami_owner     = optional(string, "679593333241")
+    ami_id        = optional(string, null) # Override the built-in per-region AMI map
   })
   default = {
     keypair = ""
