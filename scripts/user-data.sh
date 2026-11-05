@@ -1,8 +1,4 @@
   #cloud-config
-  password: ${netskope_gw_default_password}
-  infiot:
-    uri: ${netskope_tenant_url}
-    token: ${netskope_gw_activation_key}
   runcmd:
   - |
     # Pin IMDS route to primary ENI so the Netskope overlay (169.254.0.0/16)
@@ -17,6 +13,34 @@
     ip route replace 169.254.169.254/32 dev "$PRIMARY_ENI"
     IMDS
     chmod 755 /etc/networkd-dispatcher/routable.d/50-imds-route
+  - |
+    # Fetch credentials from SSM Parameter Store — keeps cleartext out of user-data.
+    # Install AWS CLI if the BWAN AMI does not ship it.
+    if ! command -v aws &>/dev/null; then
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get install -y awscli 2>/dev/null || {
+        curl -sfLo /tmp/awscliv2.zip \
+          "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+          && unzip -q /tmp/awscliv2.zip -d /tmp \
+          && /tmp/aws/install --bin-dir /usr/local/bin \
+          && rm -rf /tmp/awscliv2.zip /tmp/aws
+      }
+    fi
+    PASSWORD=$(aws ssm get-parameter \
+      --name "${ssm_password_path}" \
+      --with-decryption \
+      --query Parameter.Value \
+      --output text \
+      --region "${aws_region}")
+    TOKEN=$(aws ssm get-parameter \
+      --name "${ssm_token_path}" \
+      --with-decryption \
+      --query Parameter.Value \
+      --output text \
+      --region "${aws_region}")
+    echo "infiot:$PASSWORD" | chpasswd
+    infhostd activate -uri "${netskope_tenant_url}" -token "$TOKEN" \
+      || echo "Activation failed (gateway may already be activated) — continuing..."
   - |
     # Install SSM agent (not pre-installed on BWAN-SASE-RTM-CLOUD AMI)
     cd /tmp

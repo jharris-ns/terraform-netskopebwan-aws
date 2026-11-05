@@ -135,7 +135,8 @@ resource "aws_instance" "client_instance" {
   iam_instance_profile = aws_iam_instance_profile.gateway_ssm_profile.name
   user_data = templatefile("${path.module}/scripts/client-user-data.sh",
     {
-      password = var.clients.password
+      ssm_password_path = aws_ssm_parameter.client_password[0].name
+      aws_region        = var.aws_network_config.region
     }
   )
 
